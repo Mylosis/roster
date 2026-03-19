@@ -1,0 +1,43 @@
+# Gradle
+.gradle/
+build/
+out/
+
+# IDE - IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# IDE - Eclipse
+.project
+.settings/
+.classpath
+bin/
+
+# IDE - NetBeans
+nbactions.xml
+nb-configuration.xml
+nbproject/
+
+# IDE - VS Code
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local environment
+*.local
+.env
+
+# Logs
+*.log
+
+# Claude Code
+.claude/
+
+# Dev tools and documentation (not needed for plugin)
+documentation/
+Previews/
+START.bat
