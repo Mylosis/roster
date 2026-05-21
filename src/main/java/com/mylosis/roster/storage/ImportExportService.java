@@ -80,8 +80,7 @@ public class ImportExportService
                 return ImportResult.failure("Clipboard is empty");
             }
 
-            log.debug("Clipboard content (first 200 chars): {}",
-                json.length() > 200 ? json.substring(0, 200) + "..." : json);
+            log.debug("Clipboard content length: {} chars", json.length());
 
             return importFromJson(json, replace, duplicateMode);
         }

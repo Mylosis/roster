@@ -167,7 +167,7 @@ public class AccountStorage
         }
         data.addAccount(profile);
         save();
-        log.info("Saved account: {} (total accounts: {})", profile.getDisplayName(), data.getAccounts().size());
+        log.info("Saved account (total accounts: {})", data.getAccounts().size());
     }
 
     public void deleteProfile(String id)

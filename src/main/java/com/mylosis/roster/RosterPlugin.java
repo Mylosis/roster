@@ -193,7 +193,7 @@ public class RosterPlugin extends Plugin
             client.setUsername(profile.getUsername());
             selectedAccountId = profile.getId();
 
-            log.info("Selected account: {}", profile.getDisplayName());
+            log.debug("Selected account: {}", profile.getDisplayName());
 
             if (panel != null)
             {
