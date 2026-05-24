@@ -41,6 +41,7 @@ Thumbs.db
 documentation/
 Previews/
 START.bat
+zz.DEV-START.bat
 
 # Internal artifacts — NEVER commit to the live repo.
 # Only files needed to build/run/install/describe the plugin go in git.
