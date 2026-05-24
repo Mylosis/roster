@@ -103,8 +103,8 @@ public class PanelFooterBuilder
     private ExpandingMenuButton createImportExportMenu()
     {
         ExpandingMenuButton menu = new ExpandingMenuButton(Icons.CLIPBOARD, "Export/Import accounts");
-        menu.addMenuItem("Import from clipboard", this::doImport);
-        menu.addMenuItem("Copy to clipboard", this::doExport);
+        menu.addMenuItem("Import from Clipboard", this::doImport);
+        menu.addMenuItem("Export to Clipboard", this::doExport);
         return menu;
     }
 

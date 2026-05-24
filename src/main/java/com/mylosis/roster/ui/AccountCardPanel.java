@@ -113,7 +113,7 @@ public class AccountCardPanel extends JPanel
         boolean isOnline = loggedIn != null && displayName != null && loggedIn.equalsIgnoreCase(profile.getDisplayName());
 
         // Always render in a row so we can fit the type badge alongside the name.
-        JPanel nameRow = new JPanel(new FlowLayout(FlowLayout.LEFT, Theme.SPACING_XS, 0));
+        JPanel nameRow = new JPanel(new FlowLayout(FlowLayout.LEFT, Theme.SPACING_SM, 0));
         nameRow.setOpaque(false);
         if (isOnline)
         {

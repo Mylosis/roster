@@ -37,8 +37,8 @@ A RuneLite plugin for managing multiple OSRS accounts. Organize your mains, alts
 
 ### Import/Export
 - Click the clipboard icon in the footer
-- **Import from clipboard**: Paste JSON account data
-- **Copy to clipboard**: Export all accounts as JSON
+- **Import from Clipboard**: Paste JSON account data
+- **Export to Clipboard**: Copy all accounts as JSON
 - Per-account export available via the three-dot menu on each account
 
 ## Configuration
@@ -89,6 +89,13 @@ Requires JDK 11 or higher.
 BSD 2-Clause License
 
 ## Changelog
+
+### v1.1.1
+- **Fix: account data loss on first v1.1 upgrade.** The migration in v1.1.0 renamed `roster.json` to a backup file after handing the data to ConfigManager. ConfigManager batches its writes, so if RuneLite was closed before its debounced flush hit disk, the in-memory data was lost — and the file backup had been renamed away. Migration is now **idempotent**: the file is never renamed, so a future ConfigManager loss can always re-seed from the same place. Recovery path checks `roster.json` → `roster.backup.json` → `roster.json.pre-v1.1.bak` so users who already hit the v1.1.0 bug get their data back automatically on the next launch.
+- **Account type icons** — replaced the letter-in-circle badges with the actual OSRS sprites: official chat badges for the six Ironman variants, an Abyssal whip for Main, the in-game Skills tab icon for Skiller, and a Granite maul for Pure.
+- Badges are larger (16 → 20px in list view, 12 → 16px in grid view) for legibility.
+- More breathing room between display name and the type badge.
+- Footer menu labels tidied to match the per-account menu: "Import from Clipboard" / "Export to Clipboard".
 
 ### v1.1.0
 - **Cloud sync** — account data now persists through RuneLite's ConfigManager, so it travels with your RuneLite account across machines. Existing `roster.json` data is migrated automatically on first launch (original file preserved as `roster.json.pre-v1.1.bak`).

@@ -37,7 +37,7 @@ public class GridAccountBuilder
         String displayName = AccountCardHelper.resolveDisplayName(profile, plugin.getConfig());
 
         // Name + clickable type badge, centered as a unit
-        JPanel nameRow = new JPanel(new FlowLayout(FlowLayout.CENTER, Theme.SPACING_XS, 0));
+        JPanel nameRow = new JPanel(new FlowLayout(FlowLayout.CENTER, Theme.SPACING_SM, 0));
         nameRow.setOpaque(false);
         nameRow.setAlignmentX(Component.CENTER_ALIGNMENT);
 
@@ -109,7 +109,7 @@ public class GridAccountBuilder
             ? profile.getMetadata().getAccountType()
             : AccountType.MAIN;
         // Slightly smaller than the list-view badge to fit the compact grid card
-        return new AccountTypeBadge(current, 12, newType ->
+        return new AccountTypeBadge(current, 16, newType ->
         {
             AccountMetadata meta = profile.getMetadata();
             if (meta == null)

@@ -1,30 +1,84 @@
 package com.mylosis.roster.ui.components;
 
 import com.mylosis.roster.model.AccountType;
+import net.runelite.client.util.ImageUtil;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
+import java.util.EnumMap;
+import java.util.Map;
 import java.util.function.Consumer;
 
 /**
- * Small clickable circular badge representing an {@link AccountType}.
+ * Small clickable badge representing an {@link AccountType}, rendered with
+ * the actual OSRS sprites from the wiki:
  *
  * <ul>
- *   <li>Non-MAIN types render as a coloured circle with a single letter
- *       (I, H, U, G, G?, S, P).</li>
- *   <li>MAIN renders as a dashed-outline "+" placeholder so users still
- *       have a discoverable click target on otherwise-clean Main cards.</li>
+ *   <li>The six Ironman variants (Ironman, HCIM, UIM, GIM, UGIM) use the
+ *       official in-game chat badges.</li>
+ *   <li>Main, Skiller, and Pure are not official in-game account types,
+ *       so we use community-recognisable item/skill icons: a Bronze sword
+ *       for Main, a Bronze pickaxe for Skiller, and a Granite maul for Pure.</li>
  * </ul>
  *
- * Clicking opens a {@link JPopupMenu} listing all 8 types with the same
- * swatch icons. Selecting one invokes the callback the caller supplied.
+ * Clicking opens a {@link JPopupMenu} listing all 8 types with their
+ * matching sprite icons. Selecting one invokes the supplied callback.
+ *
+ * Resources live under {@code /com/mylosis/roster/badges/}.
  */
 public class AccountTypeBadge extends JComponent
 {
-    public static final int DEFAULT_SIZE = 14;
+    public static final int DEFAULT_SIZE = 20;
+
+    private static final String RESOURCE_BASE = "/com/mylosis/roster/badges/";
+
+    private static final Map<AccountType, String> RESOURCE = new EnumMap<>(AccountType.class);
+    static
+    {
+        RESOURCE.put(AccountType.MAIN,                   "main.png");
+        RESOURCE.put(AccountType.IRONMAN,                "ironman.png");
+        RESOURCE.put(AccountType.HARDCORE_IRONMAN,       "hcim.png");
+        RESOURCE.put(AccountType.ULTIMATE_IRONMAN,       "uim.png");
+        RESOURCE.put(AccountType.GROUP_IRONMAN,          "gim.png");
+        RESOURCE.put(AccountType.UNRANKED_GROUP_IRONMAN, "ugim.png");
+        RESOURCE.put(AccountType.SKILLER,                "skiller.png");
+        RESOURCE.put(AccountType.PURE,                   "pure.png");
+    }
+
+    /** Class-loaded once; image is cheap to re-use across cards/popovers. */
+    private static final Map<AccountType, BufferedImage> CACHE = new EnumMap<>(AccountType.class);
+
+    private static BufferedImage iconFor(AccountType t)
+    {
+        if (t == null)
+        {
+            return null;
+        }
+        BufferedImage cached = CACHE.get(t);
+        if (cached != null)
+        {
+            return cached;
+        }
+        String resource = RESOURCE.get(t);
+        if (resource == null)
+        {
+            return null;
+        }
+        try
+        {
+            BufferedImage img = ImageUtil.loadImageResource(AccountTypeBadge.class, RESOURCE_BASE + resource);
+            CACHE.put(t, img);
+            return img;
+        }
+        catch (Exception e)
+        {
+            return null;
+        }
+    }
 
     private AccountType type;
     private final int size;
@@ -46,7 +100,7 @@ public class AccountTypeBadge extends JComponent
         setMaximumSize(dim);
         setMinimumSize(dim);
         setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        setToolTipText(tooltipFor(this.type));
+        setToolTipText(this.type.getDisplayName() + " — click to change");
         setOpaque(false);
 
         addMouseListener(new MouseAdapter()
@@ -66,69 +120,50 @@ public class AccountTypeBadge extends JComponent
     public void setType(AccountType newType)
     {
         this.type = newType != null ? newType : AccountType.MAIN;
-        setToolTipText(tooltipFor(this.type));
+        setToolTipText(this.type.getDisplayName() + " — click to change");
         repaint();
-    }
-
-    private static String tooltipFor(AccountType t)
-    {
-        return t == AccountType.MAIN
-            ? "Set account type"
-            : t.getDisplayName() + " — click to change";
     }
 
     @Override
     protected void paintComponent(Graphics g)
     {
+        BufferedImage icon = iconFor(type);
         Graphics2D g2 = (Graphics2D) g.create();
-        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-
-        if (type == AccountType.MAIN)
+        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        g2.setRenderingHint(RenderingHints.KEY_RENDERING,      RenderingHints.VALUE_RENDER_QUALITY);
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,   RenderingHints.VALUE_ANTIALIAS_ON);
+        if (icon == null)
         {
-            paintPlaceholder(g2, 0, 0, size);
+            // Defensive fallback if the resource fails to load — a dim grey dot
+            // so the click target is still visible.
+            g2.setColor(new Color(110, 110, 110));
+            g2.fillOval(0, 0, size - 1, size - 1);
         }
         else
         {
-            paintFilled(g2, type, 0, 0, size, getFont());
+            drawIconCentered(g2, icon, 0, 0, size);
         }
         g2.dispose();
     }
 
-    private static void paintPlaceholder(Graphics2D g2, int x, int y, int size)
+    /**
+     * Scale the icon to fit within a {@code box × box} square, preserving
+     * aspect ratio, and draw it centered at ({@code x},{@code y}).
+     */
+    private static void drawIconCentered(Graphics2D g2, BufferedImage img, int x, int y, int box)
     {
-        g2.setColor(new Color(110, 110, 110));
-        g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
-            1f, new float[]{2f, 2f}, 0f));
-        g2.drawOval(x, y, size - 1, size - 1);
-
-        // Faint "+" in the middle for affordance
-        g2.setStroke(new BasicStroke(1f));
-        int mid = size / 2;
-        int half = Math.max(2, size / 5);
-        g2.drawLine(x + mid - half, y + mid, x + mid + half, y + mid);
-        g2.drawLine(x + mid, y + mid - half, x + mid, y + mid + half);
-    }
-
-    private static void paintFilled(Graphics2D g2, AccountType t, int x, int y, int size, Font baseFont)
-    {
-        g2.setColor(backgroundFor(t));
-        g2.fillOval(x, y, size, size);
-
-        g2.setColor(new Color(0, 0, 0, 90));
-        g2.drawOval(x, y, size - 1, size - 1);
-
-        String letter = letterFor(t);
-        if (letter.isEmpty())
+        int iw = img.getWidth();
+        int ih = img.getHeight();
+        if (iw <= 0 || ih <= 0)
         {
             return;
         }
-        g2.setColor(foregroundFor(t));
-        Font font = baseFont.deriveFont(Font.BOLD, size * 0.55f);
-        g2.setFont(font);
-        FontMetrics fm = g2.getFontMetrics();
-        int lw = fm.stringWidth(letter);
-        int la = fm.getAscent();
-        g2.drawString(letter, x + (size - lw) / 2, y + (size + la) / 2 - 1);
+        double s = Math.min((double) box / iw, (double) box / ih);
+        int w = Math.max(1, (int) Math.round(iw * s));
+        int h = Math.max(1, (int) Math.round(ih * s));
+        int dx = x + (box - w) / 2;
+        int dy = y + (box - h) / 2;
+        g2.drawImage(img, dx, dy, w, h, null);
     }
 
     private void showPicker()
@@ -150,7 +185,7 @@ public class AccountTypeBadge extends JComponent
     private JMenuItem createMenuItem(AccountType t)
     {
         JMenuItem item = new JMenuItem(t.getDisplayName());
-        item.setIcon(swatchIcon(t, 12));
+        item.setIcon(swatchIcon(t, 14));
         item.setIconTextGap(8);
         item.setBackground(Theme.BACKGROUND_DARKER);
         item.setForeground(Theme.TEXT_PRIMARY);
@@ -158,7 +193,6 @@ public class AccountTypeBadge extends JComponent
         item.setBorder(new EmptyBorder(Theme.SPACING_XS, Theme.SPACING_SM, Theme.SPACING_XS, Theme.SPACING_SM));
         if (t == type)
         {
-            // Highlight the active choice with the brand accent
             item.setForeground(Theme.ACCENT_ORANGE);
             item.setFont(Theme.fontBold(item.getFont(), Theme.FONT_SIZE_SMALL));
         }
@@ -171,8 +205,9 @@ public class AccountTypeBadge extends JComponent
     }
 
     /**
-     * A drawable swatch matching the badge styling for the given type.
-     * Used in dropdowns and menu items so the picker UI is self-describing.
+     * Reusable icon swatch matching the badge rendering. Used by dropdown
+     * renderers (InlineAccountForm) and menu items so the picker UI is
+     * self-describing.
      */
     public static Icon swatchIcon(AccountType t, int size)
     {
@@ -181,17 +216,16 @@ public class AccountTypeBadge extends JComponent
             @Override
             public void paintIcon(Component c, Graphics g, int x, int y)
             {
+                BufferedImage icon = iconFor(t);
+                if (icon == null)
+                {
+                    return;
+                }
                 Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                if (t == AccountType.MAIN)
-                {
-                    paintPlaceholder(g2, x, y, size);
-                }
-                else
-                {
-                    Font baseFont = c != null && c.getFont() != null ? c.getFont() : new Font(Font.SANS_SERIF, Font.PLAIN, 12);
-                    paintFilled(g2, t, x, y, size, baseFont);
-                }
+                g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+                g2.setRenderingHint(RenderingHints.KEY_RENDERING,      RenderingHints.VALUE_RENDER_QUALITY);
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,   RenderingHints.VALUE_ANTIALIAS_ON);
+                drawIconCentered(g2, icon, x, y, size);
                 g2.dispose();
             }
 
@@ -201,52 +235,5 @@ public class AccountTypeBadge extends JComponent
             @Override
             public int getIconHeight() { return size; }
         };
-    }
-
-    // ─── Type → visual mapping ─────────────────────────────────────────────
-
-    private static String letterFor(AccountType t)
-    {
-        switch (t)
-        {
-            case IRONMAN:                return "I";
-            case HARDCORE_IRONMAN:       return "H";
-            case ULTIMATE_IRONMAN:       return "U";
-            case GROUP_IRONMAN:          return "G";
-            case UNRANKED_GROUP_IRONMAN: return "G?";
-            case SKILLER:                return "S";
-            case PURE:                   return "P";
-            case MAIN:
-            default:                     return "";
-        }
-    }
-
-    private static Color backgroundFor(AccountType t)
-    {
-        switch (t)
-        {
-            case IRONMAN:                return new Color(170, 170, 170);
-            case HARDCORE_IRONMAN:       return new Color(190,  40,  40);
-            case ULTIMATE_IRONMAN:       return new Color(225, 225, 225);
-            case GROUP_IRONMAN:          return new Color( 80, 160,  80);
-            case UNRANKED_GROUP_IRONMAN: return new Color( 80, 160,  80, 153); // 60% alpha
-            case SKILLER:                return new Color(220, 180,  80);
-            case PURE:                   return new Color(200,  80,  80);
-            default:                     return new Color(110, 110, 110);
-        }
-    }
-
-    private static Color foregroundFor(AccountType t)
-    {
-        switch (t)
-        {
-            case HARDCORE_IRONMAN:
-            case GROUP_IRONMAN:
-            case UNRANKED_GROUP_IRONMAN:
-            case PURE:
-                return Color.WHITE;
-            default:
-                return new Color(15, 15, 15);
-        }
     }
 }

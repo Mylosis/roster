@@ -28,13 +28,16 @@ import java.util.List;
  *   <li><b>Primary:</b> RuneLite {@link ConfigManager} under group {@code roster}, key {@code data}.
  *       Cloud-syncs with the user's RuneLite account when sync is enabled on the active profile.</li>
  *   <li><b>Backup:</b> {@code roster.json} (plus a rotating {@code roster.backup.json}) in
- *       {@link RuneLite#RUNELITE_DIR}. Local belt-and-braces so users have an offline copy.</li>
+ *       {@link RuneLite#RUNELITE_DIR}. Every {@link #save()} writes to both layers, so the file
+ *       is a permanent secondary store, not a one-shot snapshot.</li>
  * </ul>
  *
  * On first load after upgrading from v1.0 (file-only storage), {@link #load()} migrates the
- * existing {@code roster.json} into ConfigManager and renames the source file to
- * {@code roster.json.pre-v1.1.bak} as an idempotency sentinel — keeping it on disk so the user
- * has a recovery snapshot if anything goes wrong.
+ * existing {@code roster.json} into ConfigManager. The migration is <b>idempotent</b> — the
+ * file is never renamed away — so a future ConfigManager loss (e.g. the client was killed
+ * before ConfigManager's debounced flush hit disk) will re-seed from the same file on the
+ * next launch. {@code roster.json.pre-v1.1.bak} is still checked during load() as a recovery
+ * source for users who upgraded under the older, non-idempotent code path.
  */
 @Slf4j
 @Singleton
@@ -76,7 +79,7 @@ public class AccountStorage
             return cachedData;
         }
 
-        // Primary: ConfigManager (cloud-synced)
+        // Primary: ConfigManager (cloud-synced when the user has it enabled)
         AccountData fromConfig = loadFromConfigManager();
         if (fromConfig != null)
         {
@@ -87,30 +90,63 @@ public class AccountStorage
             return cachedData;
         }
 
-        // Migration path: ConfigManager empty but file exists (v1.0 upgrade)
-        if (dataFile.exists())
+        // ConfigManager empty — try every on-disk backup we know about, in order
+        // of recency. This is the "ConfigManager didn't flush" recovery path: if
+        // the user's previous session was killed before ConfigManager persisted,
+        // we re-seed it from whichever file is still around.
+        //
+        // Checked in this order:
+        //   1. roster.json                  — normal save mirror, written every save()
+        //   2. roster.backup.json           — previous-write rotating backup
+        //   3. roster.json.pre-v1.1.bak     — legacy migration sentinel from older
+        //                                     v1.1 builds (kept for users who upgraded
+        //                                     before the migration was made idempotent)
+        AccountData fromFile = loadAnyFile(dataFile, backupFile, migratedFile);
+        if (fromFile != null)
         {
-            AccountData fromFile = loadFromFile(dataFile);
-            if (fromFile == null && backupFile.exists())
-            {
-                log.warn("Main file failed to parse, attempting backup");
-                fromFile = loadFromFile(backupFile);
-            }
-            if (fromFile != null)
-            {
-                cachedData = ensureSchema(fromFile);
-                log.info("Migrating {} accounts from roster.json into ConfigManager (cloud-syncable)",
-                    cachedData.getAccounts() != null ? cachedData.getAccounts().size() : 0);
-                saveToConfigManager(cachedData);
-                markMigrated();
-                return cachedData;
-            }
+            cachedData = ensureSchema(fromFile);
+            log.info("Re-seeding ConfigManager with {} accounts from file backup ({})",
+                cachedData.getAccounts() != null ? cachedData.getAccounts().size() : 0,
+                "primary/backup");
+            saveToConfigManager(cachedData);
+            // Do NOT rename the source file — keeping it around means a future
+            // ConfigManager loss can be recovered from the same place, instead
+            // of orphaning the only on-disk copy. The next save() will refresh
+            // roster.json anyway so it stays current.
+            return cachedData;
         }
 
         // Nothing anywhere
         cachedData = AccountData.createEmpty();
         log.info("No existing Roster data; starting fresh");
         return cachedData;
+    }
+
+    /**
+     * Tries each candidate file in order, returning the first that parses to a
+     * non-null {@link AccountData}. Used as a recovery cascade when ConfigManager
+     * has no data — we'd rather pull from any backup we can find than show the
+     * user an empty plugin.
+     */
+    private AccountData loadAnyFile(File... candidates)
+    {
+        for (File f : candidates)
+        {
+            if (f == null || !f.exists())
+            {
+                continue;
+            }
+            AccountData data = loadFromFile(f);
+            if (data != null)
+            {
+                if (f != dataFile)
+                {
+                    log.warn("Primary roster.json missing or unreadable; recovered from {}", f.getName());
+                }
+                return data;
+            }
+        }
+        return null;
     }
 
     /**
@@ -175,26 +211,6 @@ public class AccountStorage
             data.setVersion(AccountData.CURRENT_VERSION);
         }
         return data;
-    }
-
-    /**
-     * Renames the source roster.json to a frozen .pre-v1.1.bak so we don't re-migrate on subsequent
-     * launches. If the rename fails (e.g. file lock), we just log and continue — the next launch
-     * will see ConfigManager is populated and skip the migration path anyway, so this is a
-     * cosmetic concern.
-     */
-    private void markMigrated()
-    {
-        try
-        {
-            Files.move(dataFile.toPath(), migratedFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            log.info("Migration sentinel created: {}", migratedFile.getName());
-        }
-        catch (IOException e)
-        {
-            log.warn("Could not rename {} to {} after migration — will retry on next launch",
-                dataFile.getName(), migratedFile.getName(), e);
-        }
     }
 
     public void save()

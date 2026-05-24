@@ -1,4 +1,4 @@
-<!doctype html>
+<!doctype html><!-- build:1779585031.3728898 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -289,40 +289,22 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 16px; height: 16px;
+    width: 18px; height: 18px;
     border-radius: 50%;
-    font-size: 9.5px;
+    font-size: 10.5px;
     font-weight: 700;
     letter-spacing: -0.02em;
     color: rgb(15,15,15);
     background: rgb(180,180,180);
     border: 1px solid rgba(0,0,0,0.25);
     user-select: none;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.05);
   }
+  /* Main gets a proper grey badge with "M" — same treatment as every other type,
+     just a neutral colour so it doesn't compete with the type-specific badges. */
+  .badge[data-type="main"]  { background: rgb(130,130,130); color: white; }
   .badge.clickable { cursor: pointer; transition: transform 100ms ease; }
   .badge.clickable:hover { transform: scale(1.15); }
-  .badge-placeholder {
-    flex-shrink: 0;
-    width: 14px; height: 14px;
-    border-radius: 50%;
-    border: 1px dashed rgb(110,110,110);
-    color: rgb(120,120,120);
-    background: transparent;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
-    line-height: 1;
-    opacity: 0.55;
-    transition: opacity 100ms ease, border-color 100ms ease, color 100ms ease;
-  }
-  .badge-placeholder:hover {
-    opacity: 1;
-    border-color: var(--accent-orange);
-    color: var(--accent-orange);
-  }
-
   /* type-change popover anchored to a badge on a card */
   .type-popover {
     position: absolute;
@@ -486,13 +468,7 @@
   }
   .type-option:hover { background: rgb(55,55,55); }
   .type-option.selected { background: rgba(220,138,0,0.12); color: var(--accent-orange); }
-  .type-option .badge { width: 14px; height: 14px; font-size: 9px; }
-  .type-option .badge.empty {
-    background: transparent;
-    border: 1px dashed rgb(100,100,100);
-    color: rgb(120,120,120);
-    font-weight: 600;
-  }
+  .type-option .badge { width: 16px; height: 16px; font-size: 10px; }
 
   .form-buttons {
     display: flex;
@@ -602,10 +578,11 @@
       <h2>Account type picker (item #2) — what to try</h2>
       <p><strong>New accounts → form dropdown. Existing accounts → click the badge.</strong></p>
       <ul>
-        <li>Click <strong>+ Account</strong> — the Add form has a <em>Type ▾</em> row. Default is <em>Main</em> (rendered as a clean no-badge card).</li>
-        <li>Click the <strong>I / H / U / G / G? / S / P</strong> badge on any existing card → a popover opens with all 8 types; pick to change.</li>
-        <li>Main accounts get a subtle <span class="kbd">+</span> placeholder dot next to the name (hover to see the orange highlight). Clicking it opens the same popover, so you can promote a Main to Ironman without opening the edit form.</li>
+        <li><strong>Every account gets a visible badge now</strong> — Main shows as a neutral grey <span class="kbd">M</span>, other types use their letter on a type-coloured background (I / H / U / G / G? / S / P).</li>
+        <li>Click <strong>+ Account</strong> — the Add form has a <em>Type ▾</em> row defaulting to <em>Main</em>.</li>
+        <li>Click any badge on an existing card → popover opens with all 8 types; pick to change.</li>
         <li>Click the <strong>✎ pencil</strong> to edit other fields — the Edit form does <em>not</em> include a Type row (use the badge instead).</li>
+        <li>Badges are bumped from 16px to 18px and now have a faint outer rim to lift them off the dark card.</li>
       </ul>
 
       <h2>Sort (item #4) — approved, mocked here</h2>
@@ -674,13 +651,13 @@
           <label>Type</label>
           <div class="type-select" id="typeSelect">
             <button class="type-select-toggle" id="typeToggle">
-              <span class="badge empty" id="typeToggleBadge">—</span>
+              <span class="badge" data-type="main" id="typeToggleBadge">M</span>
               <span id="typeToggleLabel">Main</span>
               <span class="caret">▾</span>
             </button>
             <div class="type-select-menu" id="typeMenu">
               <div class="type-option selected" data-type="main">
-                <span class="badge empty">—</span><span>Main</span>
+                <span class="badge" data-type="main">M</span><span>Main</span>
               </div>
               <div class="type-option" data-type="iron">
                 <span class="badge" data-type="iron">I</span><span>Ironman</span>
@@ -733,7 +710,7 @@
     <div class="type-popover" id="typePopover">
       <div class="type-popover-title">Set account type</div>
       <div class="type-option" data-type="main">
-        <span class="badge empty">—</span><span>Main</span>
+        <span class="badge" data-type="main">M</span><span>Main</span>
       </div>
       <div class="type-option" data-type="iron">
         <span class="badge" data-type="iron">I</span><span>Ironman</span>
@@ -808,7 +785,7 @@ const ACCOUNTS = [
 ];
 
 const BADGE_LETTER = {
-  iron: 'I', hcim: 'H', uim: 'U', gim: 'G', ugim: 'G?', skill: 'S', pure: 'P'
+  main: 'M', iron: 'I', hcim: 'H', uim: 'U', gim: 'G', ugim: 'G?', skill: 'S', pure: 'P'
 };
 const BADGE_TITLE = {
   iron:'Ironman', hcim:'Hardcore Ironman', uim:'Ultimate Ironman',
@@ -876,12 +853,9 @@ function renderCard(acct, cat) {
 
   const ago = fmtAgo(acct.lastOnlineAt);
 
-  // Badge or — for Main accounts — a subtle placeholder. Both are clickable
-  // and open the type-change popover. Placeholder keeps Main's clean look
-  // while still giving the user a discoverable click target.
-  const badgeHtml = (acct.type === 'main')
-    ? `<span class="badge-placeholder" data-act="type" title="Click to set account type">+</span>`
-    : `<span class="badge clickable" data-act="type" data-type="${acct.type}" title="${BADGE_TITLE[acct.type]} — click to change">${BADGE_LETTER[acct.type]}</span>`;
+  // Every account gets a clickable badge — Main uses a neutral grey "M",
+  // other types use their letter on a type-coloured background.
+  const badgeHtml = `<span class="badge clickable" data-act="type" data-type="${acct.type}" title="${BADGE_TITLE[acct.type]} — click to change">${BADGE_LETTER[acct.type]}</span>`;
 
   const onlineDot = acct.online ? '<span class="online-dot" title="Logged in"></span>' : '';
 
@@ -990,15 +964,10 @@ function closeForm() {
 function setPickerType(type) {
   pendingType = type;
   typeLabel.textContent = BADGE_TITLE[type];
-  // re-render the toggle's badge swatch
-  typeBadge.className = 'badge' + (type === 'main' ? ' empty' : '');
-  typeBadge.removeAttribute('data-type');
-  if (type === 'main') {
-    typeBadge.textContent = '—';
-  } else {
-    typeBadge.setAttribute('data-type', type);
-    typeBadge.textContent = BADGE_LETTER[type];
-  }
+  // re-render the toggle's badge swatch — uniform treatment for every type now
+  typeBadge.className = 'badge';
+  typeBadge.setAttribute('data-type', type);
+  typeBadge.textContent = BADGE_LETTER[type];
   // highlight the matching option
   typeMenu.querySelectorAll('.type-option').forEach(opt => {
     opt.classList.toggle('selected', opt.dataset.type === type);
