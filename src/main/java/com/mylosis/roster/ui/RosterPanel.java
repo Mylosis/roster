@@ -58,6 +58,12 @@ public class RosterPanel extends PluginPanel
 
     public RosterPanel(RosterPlugin plugin)
     {
+        // Disable PluginPanel's default outer JScrollPane wrap — we manage our own
+        // scrolling via the inner scrollPane built in buildContentPanel(). With the
+        // outer wrap in place wheel events were swallowed by the inner viewport
+        // (which never needed to scroll, since it sized to its content), leaving
+        // the user with a dead scroll wheel.
+        super(false);
         this.plugin = plugin;
         this.storage = plugin.getAccountStorage();
         this.dragDropManager = new DragDropManager(plugin, this);
