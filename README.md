@@ -2,6 +2,8 @@
 
 A RuneLite plugin for managing multiple OSRS accounts. Organize your mains, alts, and pures into color-coded categories, switch between them with a single click, and have everything cloud-sync across your machines via your RuneLite account. Inspired by [Profiles Plugin.](https://runelite.net/plugin-hub/show/profiles-panel)
 
+![Roster plugin panel — drag-and-drop reordering of accounts within a category](https://raw.githubusercontent.com/Mylosis/roster/main/docs/screenshots/drag.gif)
+
 ## Features
 
 - **Account Management**: Create, edit, and organize multiple OSRS accounts

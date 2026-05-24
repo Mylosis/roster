@@ -45,10 +45,13 @@ START.bat
 # Internal artifacts — NEVER commit to the live repo.
 # Only files needed to build/run/install/describe the plugin go in git.
 # Planning docs, mockups, TODOs, process notes, scratch files stay local.
-# (If README screenshots are added later, exempt their specific path with `!docs/screenshots/`.)
+TASKS.md
 TODOS.md
 TODO.md
 NOTES.md
-docs/
+# Ignore everything in docs/ except the screenshots subfolder, which the
+# README references via raw.githubusercontent.com.
+docs/*
+!docs/screenshots/
 .scratch/
 *.scratch.*
