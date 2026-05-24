@@ -15,6 +15,8 @@ import net.runelite.client.ui.PluginPanel;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Main panel for the Roster plugin.
@@ -43,6 +45,16 @@ public class RosterPanel extends PluginPanel
 
     @Setter
     private AccountCardPanel expandedCard = null;
+
+    /**
+     * Live id→card lookup populated during each rebuild. Lets callers like
+     * {@link #refreshCard(String)} update a single visible card in place instead
+     * of forcing a full panel rebuild for trivial state changes (selection
+     * highlight, last-online timestamp). Stale entries (e.g. a deleted account)
+     * naturally drop out on the next rebuild; missing entries fall back to a
+     * full rebuild via {@link #refreshAccount(String)}.
+     */
+    private final Map<String, AccountCardPanel> cardsByAccountId = new HashMap<>();
 
     public RosterPanel(RosterPlugin plugin)
     {
@@ -160,6 +172,11 @@ public class RosterPanel extends PluginPanel
         newListPanel.setLayout(new BoxLayout(newListPanel, BoxLayout.Y_AXIS));
         newListPanel.setBackground(Theme.BACKGROUND);
 
+        // Clear the card index — the rebuild below will repopulate it as each
+        // AccountCardPanel is created. Old card references are dropped here so
+        // they can be GC'd along with the discarded list panel.
+        cardsByAccountId.clear();
+
         int[] counts = listBuilder.rebuild(newListPanel, searchFilter);
         updateProfileCount(counts[0], counts[1]);
 
@@ -168,16 +185,14 @@ public class RosterPanel extends PluginPanel
         scrollPane.setViewportView(profileListPanel);
         scrollPane.getVerticalScrollBar().setValue(0);
 
-        // Force immediate repaint up the entire component tree —
-        // without this, Swing defers the repaint until a window focus event
-        SwingUtilities.invokeLater(() -> {
-            Window window = SwingUtilities.getWindowAncestor(this);
-            if (window != null)
-            {
-                window.revalidate();
-                window.repaint();
-            }
-        });
+        // Scope the revalidate to the scrollpane subtree. The previous version
+        // walked all the way to the root window — overkill for a sidebar redraw,
+        // and on Windows it visibly flickered other RuneLite panels. Validating
+        // the viewport then the scrollpane is enough: the viewport view changed,
+        // and the scrollpane is the boundary of layout invalidation for our panel.
+        scrollPane.getViewport().revalidate();
+        scrollPane.revalidate();
+        scrollPane.repaint();
     }
 
     private void updateProfileCount(int filtered, int total)
@@ -241,5 +256,40 @@ public class RosterPanel extends PluginPanel
     {
         revalidate();
         repaint();
+    }
+
+    /**
+     * Called by {@link AccountListBuilder} and {@link CategoryPanel} as each card is
+     * inserted into the rebuilt list. Should not be called from elsewhere.
+     */
+    public void registerCard(String accountId, AccountCardPanel card)
+    {
+        if (accountId != null && card != null)
+        {
+            cardsByAccountId.put(accountId, card);
+        }
+    }
+
+    /**
+     * Refreshes a single card's mutable visual state (selected-highlight, online
+     * indicator, last-online label) without rebuilding the panel. Falls back to a
+     * full {@link #rebuild()} if the card isn't in the live index — e.g. because
+     * it's currently filtered out by search, or the account was deleted.
+     */
+    public void refreshAccount(String accountId)
+    {
+        if (accountId == null)
+        {
+            return;
+        }
+        AccountCardPanel card = cardsByAccountId.get(accountId);
+        if (card == null)
+        {
+            // Not visible — full rebuild is a safe fallback that costs us nothing
+            // here because the user isn't looking at the card anyway.
+            rebuild();
+            return;
+        }
+        card.refreshDynamicState();
     }
 }

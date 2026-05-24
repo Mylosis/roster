@@ -21,6 +21,17 @@ public class DragOverlay extends JComponent
     private int dragImageWidth = 0;
     private int dragImageHeight = 0;
 
+    // Strokes are immutable — allocate once instead of every paintComponent.
+    // At ~60Hz during a drag, the previous code created six BasicStroke objects
+    // per frame for tiny ornaments that never change.
+    private static final BasicStroke STROKE_GHOST_BORDER = new BasicStroke(2);
+    private static final BasicStroke STROKE_DROP_DASHED = new BasicStroke(
+        2, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0, new float[]{6, 4}, 0);
+    private static final BasicStroke STROKE_CATEGORY_REORDER = new BasicStroke(3);
+    private static final BasicStroke STROKE_INSERT_LINE = new BasicStroke(2);
+    private static final BasicStroke STROKE_FALLBACK_ARROW = new BasicStroke(
+        2, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
+
     public DragOverlay(DragDropManager dragManager)
     {
         this.dragManager = dragManager;
@@ -116,7 +127,7 @@ public class DragOverlay extends JComponent
             // Draw border
             g2d.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 1.0f));
             g2d.setColor(Theme.BUTTON_PRIMARY);
-            g2d.setStroke(new BasicStroke(2));
+            g2d.setStroke(STROKE_GHOST_BORDER);
             g2d.drawRoundRect(x, y, dragImageWidth - 1, dragImageHeight - 1, 8, 8);
         }
         else if (mouseLocation != null)
@@ -149,14 +160,13 @@ public class DragOverlay extends JComponent
 
             // Draw highlight border
             g2d.setColor(Theme.BUTTON_PRIMARY);
-            g2d.setStroke(new BasicStroke(2, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND,
-                0, new float[]{6, 4}, 0));
+            g2d.setStroke(STROKE_DROP_DASHED);
             g2d.drawRoundRect(x + 1, y + 1, width - 2, height - 2, 6, 6);
 
             // Draw "drop here" indicator for category reordering or profile positioning
             if (target.type == DragDropManager.DropTarget.Type.CATEGORY_REORDER)
             {
-                g2d.setStroke(new BasicStroke(3));
+                g2d.setStroke(STROKE_CATEGORY_REORDER);
                 g2d.setColor(Theme.BUTTON_PRIMARY);
 
                 // Draw line at insert position
@@ -179,7 +189,7 @@ public class DragOverlay extends JComponent
             else if (target.type == DragDropManager.DropTarget.Type.CATEGORY_DROP && target.insertIndex >= 0)
             {
                 // Draw insert position indicator for profile drops
-                g2d.setStroke(new BasicStroke(2));
+                g2d.setStroke(STROKE_INSERT_LINE);
                 g2d.setColor(Theme.BUTTON_PRIMARY);
 
                 // Draw a small "insert here" line
@@ -226,7 +236,7 @@ public class DragOverlay extends JComponent
         g2d.fillOval(x, y, size, size);
 
         g2d.setColor(Theme.BUTTON_PRIMARY);
-        g2d.setStroke(new BasicStroke(2));
+        g2d.setStroke(STROKE_GHOST_BORDER);
         g2d.drawOval(x, y, size, size);
 
         // Draw move icon
@@ -236,7 +246,7 @@ public class DragOverlay extends JComponent
         int arrowLen = 8;
 
         // Four arrows pointing outward
-        g2d.setStroke(new BasicStroke(2, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g2d.setStroke(STROKE_FALLBACK_ARROW);
         g2d.drawLine(cx, cy - arrowLen, cx, cy + arrowLen);
         g2d.drawLine(cx - arrowLen, cy, cx + arrowLen, cy);
     }

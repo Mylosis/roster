@@ -20,6 +20,11 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Two-layer persistence for {@link AccountData}.
@@ -44,7 +49,9 @@ import java.util.List;
 public class AccountStorage
 {
     private static final String CONFIG_GROUP = "roster";
-    private static final String CONFIG_KEY_DATA = "data";
+    /** Visible so {@link com.mylosis.roster.RosterPlugin#onConfigChanged} can filter out
+     *  our own data writes — see the note there about the save/rebuild feedback loop. */
+    public static final String CONFIG_KEY_DATA = "data";
 
     private static final String DATA_FILE_NAME = "roster.json";
     private static final String BACKUP_FILE_NAME = "roster.backup.json";
@@ -58,12 +65,41 @@ public class AccountStorage
 
     private AccountData cachedData;
 
+    /**
+     * Cached sorted-by-sortOrder view of the groups list. Built lazily on first
+     * read after a mutation, then served as a defensive copy. Avoids the O(n log n)
+     * sort that the previous {@link #getGroups()} did on every single call — and it
+     * was called several times per UI rebuild.
+     */
+    private List<ProfileGroup> sortedGroupsCache;
+
+    /**
+     * Async writer for the on-disk JSON mirror. ConfigManager writes stay sync
+     * (cheap in-process call into RuneLite's debouncer); the file write is the
+     * expensive part — {@link Files#copy} for the backup rotation plus a fresh
+     * {@link FileWriter} for the current file, on whichever thread called save().
+     * Coalescing means a burst of saves (e.g. dragging that rewrites every
+     * profile's sortOrder) only produces one disk write at the tail of the burst.
+     */
+    private static final long DISK_WRITE_COALESCE_MS = 250;
+    private final ScheduledExecutorService diskExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "roster-disk-writer");
+        t.setDaemon(true);
+        return t;
+    });
+    private final AtomicReference<ScheduledFuture<?>> pendingFlush = new AtomicReference<>();
+    /** The data snapshot the next flush will serialize. Replaced on every save(). */
+    private volatile AccountData pendingFlushData;
+
     @Inject
     public AccountStorage(Gson gson, ConfigManager configManager)
     {
-        this.gson = gson.newBuilder()
-            .setPrettyPrinting()
-            .create();
+        // Storage Gson is compact — roster.json is internal, never read by humans.
+        // Pretty-printing roughly doubles file size and serialization cost, which
+        // adds up because every account/group write rewrites the whole blob.
+        // ImportExportService keeps its own pretty Gson for clipboard/file exports
+        // where readability matters.
+        this.gson = gson.newBuilder().create();
         this.configManager = configManager;
 
         File runeliteDir = RuneLite.RUNELITE_DIR;
@@ -221,8 +257,70 @@ public class AccountStorage
             return;
         }
 
+        // Any save is preceded by a mutation; drop derived caches so the next
+        // read recomputes against fresh data.
+        sortedGroupsCache = null;
+        cachedData.invalidateIndexes();
+
+        // ConfigManager handles its own debouncing internally, so we hit it
+        // directly — it's also our primary persistence layer.
         saveToConfigManager(cachedData);
-        saveToFile(cachedData);
+        // Schedule the file mirror on a background thread; coalesce a burst of
+        // saves (drag reorders write per-profile in a tight loop) into one write.
+        scheduleDiskFlush(cachedData);
+    }
+
+    private void scheduleDiskFlush(AccountData data)
+    {
+        pendingFlushData = data;
+        ScheduledFuture<?> previous = pendingFlush.getAndSet(
+            diskExecutor.schedule(this::flushPending, DISK_WRITE_COALESCE_MS, TimeUnit.MILLISECONDS));
+        if (previous != null)
+        {
+            previous.cancel(false);
+        }
+    }
+
+    private void flushPending()
+    {
+        AccountData data = pendingFlushData;
+        if (data == null)
+        {
+            return;
+        }
+        pendingFlushData = null;
+        pendingFlush.set(null);
+        saveToFile(data);
+    }
+
+    /**
+     * Synchronously flush any pending coalesced disk write. Called from
+     * {@code RosterPlugin.shutDown} so we don't leave a queued write behind when
+     * the plugin (or client) is going down.
+     */
+    public void flushDiskWritesSync()
+    {
+        ScheduledFuture<?> current = pendingFlush.getAndSet(null);
+        if (current != null)
+        {
+            current.cancel(false);
+        }
+        AccountData data = pendingFlushData;
+        if (data != null)
+        {
+            pendingFlushData = null;
+            saveToFile(data);
+        }
+    }
+
+    /**
+     * Stop the background writer. Called from {@code RosterPlugin.shutDown}
+     * after {@link #flushDiskWritesSync()} so any in-flight write completes first.
+     */
+    public void shutdown()
+    {
+        flushDiskWritesSync();
+        diskExecutor.shutdown();
     }
 
     private void saveToConfigManager(AccountData data)
@@ -260,6 +358,7 @@ public class AccountStorage
     public void invalidateCache()
     {
         cachedData = null;
+        sortedGroupsCache = null;
     }
 
     // Account operations
@@ -287,6 +386,9 @@ public class AccountStorage
         {
             log.debug("Adding new account: {}", profile.getDisplayName());
         }
+        // Any save means the alias/username/notes may have changed; drop the
+        // lazy search blob so the next filter pass rebuilds it.
+        profile.invalidateSearchHaystack();
         data.addAccount(profile);
         save();
         log.info("Saved account (total accounts: {})", data.getAccounts().size());
@@ -302,10 +404,16 @@ public class AccountStorage
     // Group operations
     public List<ProfileGroup> getGroups()
     {
+        List<ProfileGroup> cached = sortedGroupsCache;
+        if (cached != null)
+        {
+            return new ArrayList<>(cached);
+        }
         AccountData data = load();
         List<ProfileGroup> groups = data.getGroups() != null ? new ArrayList<>(data.getGroups()) : new ArrayList<>();
         groups.sort((a, b) -> Integer.compare(a.getSortOrder(), b.getSortOrder()));
-        return groups;
+        sortedGroupsCache = groups;
+        return new ArrayList<>(groups);
     }
 
     public ProfileGroup getGroup(String id)

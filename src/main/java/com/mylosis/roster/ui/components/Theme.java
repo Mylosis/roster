@@ -4,6 +4,7 @@ import net.runelite.client.ui.ColorScheme;
 
 import java.awt.Color;
 import java.awt.Font;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Centralized theme constants for consistent UI styling throughout the plugin.
@@ -142,11 +143,32 @@ public final class Theme
     }
 
     /**
-     * Creates a font with the specified style and size.
+     * Memoized font derivations. Each card on a panel rebuild derives 4–5 fonts
+     * from the same base (the L&F default), so for 100 accounts that's ~500
+     * {@code Font.deriveFont} allocations per rebuild. AWT Fonts are immutable,
+     * so caching by (base, style, size) is safe and the cache stays small in
+     * practice (a handful of base fonts × ~6 sizes × 2 styles).
+     */
+    private static final java.util.Map<Long, Font> FONT_CACHE = new ConcurrentHashMap<>();
+
+    /**
+     * Creates a font with the specified style and size, reusing a cached
+     * derivation when possible.
      */
     public static Font font(Font base, int style, float size)
     {
-        return base.deriveFont(style, size);
+        if (base == null) return null;
+        // Pack base identity hash + style + size into a single long key. Base
+        // identity (rather than equals) is intentional — distinct Font instances
+        // can derive differently even when superficially equal.
+        long key = ((long) System.identityHashCode(base) << 32)
+            | ((long) (style & 0xFFFF) << 16)
+            | (Float.floatToRawIntBits(size) & 0xFFFFL);
+        Font cached = FONT_CACHE.get(key);
+        if (cached != null) return cached;
+        Font derived = base.deriveFont(style, size);
+        FONT_CACHE.put(key, derived);
+        return derived;
     }
 
     /**

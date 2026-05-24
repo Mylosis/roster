@@ -6,7 +6,9 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Data
 @Builder
@@ -54,20 +56,43 @@ public class AccountData
             .build();
     }
 
+    // Lazy id→entity indexes. Rebuilt on demand and invalidated whenever the
+    // backing lists are mutated. Kept transient so Gson never serializes them.
+    private transient Map<String, Account> accountIndex;
+    private transient Map<String, ProfileGroup> groupIndex;
+
     public Account findAccountById(String id)
     {
-        return accounts.stream()
-            .filter(p -> p.getId().equals(id))
-            .findFirst()
-            .orElse(null);
+        if (id == null || accounts == null) return null;
+        Map<String, Account> idx = accountIndex;
+        if (idx == null)
+        {
+            idx = new HashMap<>(accounts.size() * 2);
+            for (Account a : accounts) idx.put(a.getId(), a);
+            accountIndex = idx;
+        }
+        return idx.get(id);
     }
 
     public ProfileGroup findGroupById(String id)
     {
-        return groups.stream()
-            .filter(g -> g.getId().equals(id))
-            .findFirst()
-            .orElse(null);
+        if (id == null || groups == null) return null;
+        Map<String, ProfileGroup> idx = groupIndex;
+        if (idx == null)
+        {
+            idx = new HashMap<>(groups.size() * 2);
+            for (ProfileGroup g : groups) idx.put(g.getId(), g);
+            groupIndex = idx;
+        }
+        return idx.get(id);
+    }
+
+    /** Invalidates the lazy id→entity indexes; call after any structural change
+     *  to {@link #accounts} or {@link #groups}. The next find* call will rebuild. */
+    public void invalidateIndexes()
+    {
+        accountIndex = null;
+        groupIndex = null;
     }
 
     public List<Account> getAccountsInGroup(String groupId)
@@ -103,6 +128,7 @@ public class AccountData
             accounts = new ArrayList<>();
         }
         accounts.add(profile);
+        invalidateIndexes();
     }
 
     public void removeAccount(String id)
@@ -110,6 +136,7 @@ public class AccountData
         if (accounts != null)
         {
             accounts.removeIf(p -> p.getId().equals(id));
+            invalidateIndexes();
         }
     }
 
@@ -120,6 +147,7 @@ public class AccountData
             groups = new ArrayList<>();
         }
         groups.add(group);
+        invalidateIndexes();
     }
 
     public void removeGroup(String id)
@@ -139,5 +167,6 @@ public class AccountData
                 }
             }
         }
+        invalidateIndexes();
     }
 }

@@ -15,7 +15,9 @@ import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 public class CategoryPanel extends JPanel
@@ -26,6 +28,10 @@ public class CategoryPanel extends JPanel
     private final List<Account> profiles;
     private final DragDropManager dragDropManager;
     private final CategoryFormHandler formHandler;
+    /** The owning panel — passed in directly because plugin.getPanel() is not yet
+     *  populated during the very first rebuild (it runs inside the RosterPanel
+     *  constructor, before RosterPlugin's field is assigned). */
+    private final RosterPanel ownerPanel;
 
     private final JPanel contentWrapper;
     private final JLabel chevronLabel;
@@ -33,10 +39,27 @@ public class CategoryPanel extends JPanel
 
     public CategoryPanel(RosterPlugin plugin, ProfileGroup group, List<Account> profiles, DragDropManager dragDropManager)
     {
+        // Legacy two-arg-ish path: best-effort lookup. Safe to call only after
+        // RosterPanel construction has completed.
+        this(plugin, group, profiles, dragDropManager, Collections.emptyMap(), plugin.getPanel());
+    }
+
+    /**
+     * @param groupsById pre-resolved group lookup shared by all cards built in this
+     *                   rebuild pass — saves an O(n) storage scan per card border.
+     * @param ownerPanel the RosterPanel hosting these cards. Passed in explicitly
+     *                   because plugin.getPanel() is null during the first rebuild
+     *                   (it runs inside RosterPanel's own constructor).
+     */
+    public CategoryPanel(RosterPlugin plugin, ProfileGroup group, List<Account> profiles,
+                         DragDropManager dragDropManager, Map<String, ProfileGroup> groupsById,
+                         RosterPanel ownerPanel)
+    {
         this.plugin = plugin;
         this.group = group;
         this.profiles = profiles;
         this.dragDropManager = dragDropManager;
+        this.ownerPanel = ownerPanel;
         this.collapsed = group.isCollapsed();
         this.formHandler = new CategoryFormHandler(plugin, group, this::toggleCollapsed);
 
@@ -60,10 +83,11 @@ public class CategoryPanel extends JPanel
 
             for (Account profile : profiles)
             {
-                AccountCardPanel card = new AccountCardPanel(plugin, profile, plugin.getPanel());
+                AccountCardPanel card = new AccountCardPanel(plugin, profile, ownerPanel, groupsById);
                 AccountDragListener dragListener = new AccountDragListener(dragDropManager, profile, card);
                 dragListener.attachToComponent(card);
                 gridPanel.add(card);
+                if (ownerPanel != null) ownerPanel.registerCard(profile.getId(), card);
             }
 
             contentWrapper.setLayout(new BorderLayout());
@@ -78,11 +102,12 @@ public class CategoryPanel extends JPanel
 
             for (Account profile : profiles)
             {
-                AccountCardPanel card = new AccountCardPanel(plugin, profile, plugin.getPanel());
+                AccountCardPanel card = new AccountCardPanel(plugin, profile, ownerPanel, groupsById);
                 AccountDragListener dragListener = new AccountDragListener(dragDropManager, profile, card);
                 dragListener.attachToComponent(card);
                 contentWrapper.add(card);
                 contentWrapper.add(Box.createVerticalStrut(Theme.SPACING_XS));
+                if (ownerPanel != null) ownerPanel.registerCard(profile.getId(), card);
             }
 
             contentWrapper.add(formHandler.getOrCreateFormPanel());

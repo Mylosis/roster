@@ -119,6 +119,9 @@ public class GridAccountBuilder
             }
             meta.setAccountType(newType);
             plugin.getAccountStorage().saveAccount(profile);
+            // Pre-Phase-A this relied on the ConfigChanged echo from the data write
+            // to refresh the badge. That echo is now suppressed, so trigger explicitly.
+            plugin.getPanel().rebuild();
         });
     }
 

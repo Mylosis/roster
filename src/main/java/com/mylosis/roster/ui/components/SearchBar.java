@@ -3,6 +3,7 @@ package com.mylosis.roster.ui.components;
 import javax.swing.BorderFactory;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
+import javax.swing.Timer;
 import javax.swing.border.EmptyBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
@@ -30,8 +31,21 @@ public class SearchBar extends JPanel
     private boolean isFocused = false;
     private String placeholderText = "";
 
+    /**
+     * Debounce coalesces rapid keystrokes into a single search invocation.
+     * Each typed character triggers a full panel rebuild downstream, so without
+     * this a 10-character query meant 10 teardown-and-rebuild cycles. 120ms is
+     * imperceptible to users but eliminates the burst — restart()-on-edit means
+     * we only fire once the user actually pauses.
+     */
+    private static final int SEARCH_DEBOUNCE_MS = 120;
+    private final Timer searchDebounceTimer;
+
     public SearchBar()
     {
+        searchDebounceTimer = new Timer(SEARCH_DEBOUNCE_MS, e -> fireSearchChanged());
+        searchDebounceTimer.setRepeats(false);
+
         setLayout(new BorderLayout(Theme.SPACING_SM, 0));
         setBackground(Theme.BACKGROUND_DARKER);
         setBorder(BorderFactory.createCompoundBorder(
@@ -207,6 +221,14 @@ public class SearchBar extends JPanel
     private void notifySearchChanged()
     {
         clearButton.repaint();
+        // Coalesce: each keystroke restarts the timer; the callback fires only
+        // after the user pauses for SEARCH_DEBOUNCE_MS. Clearing the field via
+        // clear() needs an immediate fire (no pause), handled in clear().
+        searchDebounceTimer.restart();
+    }
+
+    private void fireSearchChanged()
+    {
         if (onSearchChanged != null)
         {
             onSearchChanged.accept(textField.getText().toLowerCase().trim());
@@ -232,6 +254,13 @@ public class SearchBar extends JPanel
     {
         textField.setText("");
         textField.requestFocus();
+        // Clear is an explicit user action — flush any pending debounce so the
+        // filtered list updates immediately rather than after a brief delay.
+        if (searchDebounceTimer.isRunning())
+        {
+            searchDebounceTimer.stop();
+        }
+        fireSearchChanged();
     }
 
     public void setPlaceholder(String placeholder)

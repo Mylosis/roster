@@ -20,9 +20,39 @@ public class DropTargetFinder
 {
     private final RosterPanel panel;
 
+    // Per-drag snapshot of the panel structure. Populated by primeSnapshot() at
+    // drag start, consulted on every mouse-moved event (~60Hz). The previous
+    // implementation walked the entire component tree on every single event —
+    // for a panel with ~50 components that's ~3000 traversals per second of dragging.
+    private List<CategoryPanel> snapshotCategoryPanels;
+    private JPanel snapshotUncategorizedHeader;
+
     public DropTargetFinder(RosterPanel panel)
     {
         this.panel = panel;
+    }
+
+    /**
+     * Snapshot the panel's drop-target component structure for the lifetime of a
+     * single drag. Called by {@link DragDropManager#startProfileDrag} and
+     * {@link DragDropManager#startCategoryDrag}; cleared by {@code resetDragState}.
+     * The snapshot is invalidated if the panel rebuilds during the drag — but the
+     * drag itself will end on mouse release, so a stale snapshot at worst causes
+     * one final frame of imprecise highlighting.
+     */
+    public void primeSnapshot()
+    {
+        snapshotCategoryPanels = findCategoryPanels();
+        snapshotUncategorizedHeader = findUncategorizedHeader();
+    }
+
+    /**
+     * Drop the per-drag snapshot. Called by {@code DragDropManager.resetDragState}.
+     */
+    public void clearSnapshot()
+    {
+        snapshotCategoryPanels = null;
+        snapshotUncategorizedHeader = null;
     }
 
     /**
@@ -43,7 +73,9 @@ public class DropTargetFinder
      */
     public DragDropManager.DropTarget findForCategory(Point screenPoint, ProfileGroup draggedCategory)
     {
-        List<CategoryPanel> categoryPanels = findCategoryPanels();
+        List<CategoryPanel> categoryPanels = snapshotCategoryPanels != null
+            ? snapshotCategoryPanels
+            : findCategoryPanels();
 
         for (int i = 0; i < categoryPanels.size(); i++)
         {
@@ -84,7 +116,9 @@ public class DropTargetFinder
 
     private DragDropManager.DropTarget checkCategoryPanels(Point screenPoint, Account draggedAccount)
     {
-        List<CategoryPanel> categoryPanels = findCategoryPanels();
+        List<CategoryPanel> categoryPanels = snapshotCategoryPanels != null
+            ? snapshotCategoryPanels
+            : findCategoryPanels();
 
         for (CategoryPanel categoryPanel : categoryPanels)
         {
@@ -118,7 +152,9 @@ public class DropTargetFinder
 
     private DragDropManager.DropTarget checkUncategorizedHeader(Point screenPoint, Account draggedAccount)
     {
-        JPanel header = findUncategorizedHeader();
+        JPanel header = snapshotUncategorizedHeader != null
+            ? snapshotUncategorizedHeader
+            : findUncategorizedHeader();
         if (header == null || !header.isShowing()) return null;
 
         try

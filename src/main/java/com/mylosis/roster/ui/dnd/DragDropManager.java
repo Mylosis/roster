@@ -86,6 +86,9 @@ public class DragDropManager
         dragSource = source;
         dragStartPoint = screenPoint;
         currentDragPoint = screenPoint;
+        // Snapshot the panel structure once per drag so updateDrag() doesn't
+        // re-walk the component tree on every mouse-moved event.
+        targetFinder.primeSnapshot();
         overlay.setDragImage(source);
         overlay.setMouseLocation(screenPoint);
         overlay.setVisible(true);
@@ -101,6 +104,7 @@ public class DragDropManager
         dragSource = source;
         dragStartPoint = screenPoint;
         currentDragPoint = screenPoint;
+        targetFinder.primeSnapshot();
         overlay.setDragImage(source);
         overlay.setMouseLocation(screenPoint);
         overlay.setVisible(true);
@@ -190,6 +194,7 @@ public class DragDropManager
         dragStartPoint = null;
         currentDragPoint = null;
         currentDropTarget = null;
+        targetFinder.clearSnapshot();
         overlay.clearDragImage();
         overlay.setVisible(false);
         overlay.repaint();

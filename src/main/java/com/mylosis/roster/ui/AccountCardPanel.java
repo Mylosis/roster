@@ -5,6 +5,7 @@ import com.mylosis.roster.RosterPlugin;
 import com.mylosis.roster.model.Account;
 import com.mylosis.roster.model.AccountMetadata;
 import com.mylosis.roster.model.AccountType;
+import com.mylosis.roster.model.ProfileGroup;
 import com.mylosis.roster.ui.components.AccountTypeBadge;
 import com.mylosis.roster.ui.components.InlineAccountForm;
 import com.mylosis.roster.ui.components.Theme;
@@ -15,6 +16,8 @@ import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.util.Collections;
+import java.util.Map;
 
 public class AccountCardPanel extends JPanel
 {
@@ -29,13 +32,24 @@ public class AccountCardPanel extends JPanel
     private CardExpansionHandler expansionHandler;
     private boolean gridEditMode = false;
     private RosterPanel parentPanel;
+    /** Pre-resolved group lookup passed down from the rebuild — used by
+     *  {@link #createCardBorder()} so each card no longer does its own
+     *  O(n) storage scan to find its parent group's color. */
+    private final Map<String, ProfileGroup> groupsById;
 
     public AccountCardPanel(RosterPlugin plugin, Account profile, RosterPanel parentPanel)
+    {
+        this(plugin, profile, parentPanel, Collections.emptyMap());
+    }
+
+    public AccountCardPanel(RosterPlugin plugin, Account profile, RosterPanel parentPanel,
+                            Map<String, ProfileGroup> groupsById)
     {
         this.plugin = plugin;
         this.profile = profile;
         this.config = plugin.getConfig();
         this.parentPanel = parentPanel;
+        this.groupsById = groupsById != null ? groupsById : Collections.emptyMap();
         boolean isSelected = profile.getId().equals(plugin.getSelectedAccountId());
         this.currentBackground = isSelected ? Theme.CARD_SELECTED : Theme.CARD_BACKGROUND;
 
@@ -60,9 +74,16 @@ public class AccountCardPanel extends JPanel
 
     private javax.swing.border.Border createCardBorder()
     {
-        if (profile.getGroupId() != null)
+        String gid = profile.getGroupId();
+        if (gid != null)
         {
-            var group = plugin.getAccountStorage().getGroup(profile.getGroupId());
+            // Prefer the pre-resolved map; fall back to storage only when this card
+            // was constructed via the legacy single-arg constructor (e.g. dialogs).
+            ProfileGroup group = groupsById.get(gid);
+            if (group == null)
+            {
+                group = plugin.getAccountStorage().getGroup(gid);
+            }
             if (group != null)
             {
                 Color catColor = Theme.parseColor(group.getColor());
@@ -78,13 +99,20 @@ public class AccountCardPanel extends JPanel
         return BorderFactory.createLineBorder(Theme.CARD_BORDER, 1);
     }
 
+    private JPanel infoPanelHolder;
+
     private void buildCard(RosterPanel parentPanel)
     {
         headerPanel = new JPanel(new BorderLayout(Theme.SPACING_MD, 0));
         headerPanel.setOpaque(false);
         headerPanel.setBorder(new EmptyBorder(Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG));
 
-        headerPanel.add(createInfoPanel(), BorderLayout.CENTER);
+        // Wrap the info panel so refreshDynamicState() can replace it in place
+        // without disturbing the action buttons (which carry their own listeners).
+        infoPanelHolder = new JPanel(new BorderLayout());
+        infoPanelHolder.setOpaque(false);
+        infoPanelHolder.add(createInfoPanel(), BorderLayout.CENTER);
+        headerPanel.add(infoPanelHolder, BorderLayout.CENTER);
         headerPanel.add(createActionButtons(), BorderLayout.EAST);
 
         add(headerPanel, BorderLayout.NORTH);
@@ -93,6 +121,44 @@ public class AccountCardPanel extends JPanel
         JPanel formPanel = expansionHandler.createFormPanel();
         formPanel.setVisible(false);
         add(formPanel, BorderLayout.CENTER);
+    }
+
+    /**
+     * Recompute the parts of this card that depend on transient plugin state
+     * (selected highlight, online dot, last-online label) without rebuilding
+     * the full panel. Called by {@link RosterPanel#refreshAccount(String)} after
+     * {@code selectAccount} or {@code stampLastOnline}.
+     *
+     * <p>Grid cards are rebuilt by {@code GridAccountBuilder}, which composes the
+     * whole card body in a single call — for those we fall back to a full panel
+     * rebuild via the caller (which handles a missing card id the same way).
+     * No-op when the card is currently expanded for editing.
+     */
+    public void refreshDynamicState()
+    {
+        if (config.gridView() || infoPanelHolder == null)
+        {
+            // Grid cards aren't covered by the holder pattern. Punt to a full
+            // rebuild — incremental work isn't worth the complexity for the
+            // compact view. The caller will catch this via the cardsByAccountId
+            // miss path on the next refresh.
+            if (plugin.getPanel() != null) plugin.getPanel().rebuild();
+            return;
+        }
+        if (expansionHandler != null && expansionHandler.isExpanded())
+        {
+            // Don't rebuild the info panel while the user is editing — would
+            // visually flicker the form open beneath them.
+            return;
+        }
+        boolean isSelected = profile.getId().equals(plugin.getSelectedAccountId());
+        currentBackground = isSelected ? Theme.CARD_SELECTED : Theme.CARD_BACKGROUND;
+        setBackground(currentBackground);
+
+        infoPanelHolder.removeAll();
+        infoPanelHolder.add(createInfoPanel(), BorderLayout.CENTER);
+        infoPanelHolder.revalidate();
+        infoPanelHolder.repaint();
     }
 
     private JPanel createInfoPanel()
@@ -200,8 +266,10 @@ public class AccountCardPanel extends JPanel
             }
             meta.setAccountType(newType);
             plugin.getAccountStorage().saveAccount(profile);
-            // The ConfigChanged handler will trigger a panel rebuild, picking up
-            // the new badge styling — no explicit rebuild needed here.
+            // Pre-Phase-A this relied on the ConfigChanged echo from the data write
+            // to refresh the badge. That echo is now suppressed (it caused unrelated
+            // rebuilds across the app), so trigger one explicitly.
+            plugin.getPanel().rebuild();
         });
     }
 

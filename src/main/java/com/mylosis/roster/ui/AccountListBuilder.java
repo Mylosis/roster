@@ -17,7 +17,11 @@ import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Builds the scrollable profile list content.
@@ -50,10 +54,16 @@ public class AccountListBuilder
         List<Account> allProfiles = storage.getAccounts();
         List<Account> filteredProfiles = filterProfiles(allProfiles, searchFilter);
         List<ProfileGroup> sortedGroups = getSortedGroups();
-        List<String> addedProfileIds = new ArrayList<>();
+        // Resolve group-by-id once per rebuild. Used by both the grouping pass
+        // below and by AccountCardPanel when it needs the category color for its
+        // border — previously each card did its own storage.getGroup() lookup,
+        // which was O(n*m) in card and group counts.
+        Map<String, ProfileGroup> groupsById = new HashMap<>(sortedGroups.size() * 2);
+        for (ProfileGroup g : sortedGroups) groupsById.put(g.getId(), g);
+        Set<String> addedProfileIds = new HashSet<>();
 
-        buildGroupedProfiles(targetPanel, filteredProfiles, sortedGroups, addedProfileIds, searchFilter);
-        buildUngroupedProfiles(targetPanel, filteredProfiles, sortedGroups, addedProfileIds);
+        buildGroupedProfiles(targetPanel, filteredProfiles, sortedGroups, groupsById, addedProfileIds, searchFilter);
+        buildUngroupedProfiles(targetPanel, filteredProfiles, sortedGroups, groupsById, addedProfileIds);
 
         if (filteredProfiles.isEmpty() && sortedGroups.isEmpty())
         {
@@ -74,26 +84,31 @@ public class AccountListBuilder
     }
 
     private void buildGroupedProfiles(JPanel target, List<Account> filteredProfiles,
-                                      List<ProfileGroup> groups, List<String> addedProfileIds,
-                                      String searchFilter)
+                                      List<ProfileGroup> groups, Map<String, ProfileGroup> groupsById,
+                                      Set<String> addedProfileIds, String searchFilter)
     {
+        // Bucket profiles by groupId in one pass instead of scanning the filtered
+        // list once per group. Previous O(groups * profiles); now O(profiles + groups).
+        Map<String, List<Account>> byGroup = new HashMap<>(groups.size() * 2);
+        for (Account profile : filteredProfiles)
+        {
+            String gid = profile.getGroupId();
+            if (gid != null && groupsById.containsKey(gid))
+            {
+                byGroup.computeIfAbsent(gid, k -> new ArrayList<>()).add(profile);
+                addedProfileIds.add(profile.getId());
+            }
+        }
+
         for (ProfileGroup group : groups)
         {
-            List<Account> groupProfiles = new ArrayList<>();
-            for (Account profile : filteredProfiles)
-            {
-                if (group.getId().equals(profile.getGroupId()))
-                {
-                    groupProfiles.add(profile);
-                    addedProfileIds.add(profile.getId());
-                }
-            }
-
+            List<Account> groupProfiles = byGroup.getOrDefault(group.getId(), new ArrayList<>());
             sortBySortOrder(groupProfiles);
 
             if (!groupProfiles.isEmpty() || searchFilter.isEmpty())
             {
-                CategoryPanel categoryPanel = new CategoryPanel(plugin, group, groupProfiles, dragDropManager);
+                CategoryPanel categoryPanel = new CategoryPanel(
+                    plugin, group, groupProfiles, dragDropManager, groupsById, parentPanel);
                 target.add(categoryPanel);
                 target.add(Box.createVerticalStrut(Theme.SPACING_LG));
             }
@@ -101,7 +116,8 @@ public class AccountListBuilder
     }
 
     private void buildUngroupedProfiles(JPanel target, List<Account> filteredProfiles,
-                                        List<ProfileGroup> groups, List<String> addedProfileIds)
+                                        List<ProfileGroup> groups, Map<String, ProfileGroup> groupsById,
+                                        Set<String> addedProfileIds)
     {
         List<Account> ungrouped = new ArrayList<>();
         for (Account profile : filteredProfiles)
@@ -136,10 +152,11 @@ public class AccountListBuilder
                 gridPanel.setBackground(Theme.BACKGROUND);
                 for (Account profile : ungrouped)
                 {
-                    AccountCardPanel card = new AccountCardPanel(plugin, profile, parentPanel);
+                    AccountCardPanel card = new AccountCardPanel(plugin, profile, parentPanel, groupsById);
                     AccountDragListener dragListener = new AccountDragListener(dragDropManager, profile, card);
                     dragListener.attachToComponent(card);
                     gridPanel.add(card);
+                    parentPanel.registerCard(profile.getId(), card);
                 }
                 JPanel wrapper = new JPanel(new BorderLayout());
                 wrapper.setBackground(Theme.BACKGROUND);
@@ -153,11 +170,12 @@ public class AccountListBuilder
                 ungroupedPanel.setBackground(Theme.BACKGROUND);
                 for (Account profile : ungrouped)
                 {
-                    AccountCardPanel card = new AccountCardPanel(plugin, profile, parentPanel);
+                    AccountCardPanel card = new AccountCardPanel(plugin, profile, parentPanel, groupsById);
                     AccountDragListener dragListener = new AccountDragListener(dragDropManager, profile, card);
                     dragListener.attachToComponent(card);
                     ungroupedPanel.add(card);
                     ungroupedPanel.add(Box.createVerticalStrut(Theme.SPACING_XS));
+                    parentPanel.registerCard(profile.getId(), card);
                 }
                 target.add(ungroupedPanel);
             }
@@ -178,14 +196,23 @@ public class AccountListBuilder
         profiles.sort(comparatorFor(key));
     }
 
+    private static final Comparator<Account> NAME_ASC_COMPARATOR =
+        // String.CASE_INSENSITIVE_ORDER is allocation-free per compare; the previous
+        // safeLower() form allocated a temp String for every comparison, multiplied
+        // by O(n log n) for each sort, repeated for every category on each rebuild.
+        Comparator.comparing(Account::getDisplayName,
+            Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER));
+
+    private static final Comparator<Account> NAME_DESC_COMPARATOR = NAME_ASC_COMPARATOR.reversed();
+
     private static Comparator<Account> comparatorFor(SortKey key)
     {
         switch (key)
         {
             case NAME_ASC:
-                return Comparator.comparing(a -> safeLower(a.getDisplayName()));
+                return NAME_ASC_COMPARATOR;
             case NAME_DESC:
-                return Comparator.comparing((Account a) -> safeLower(a.getDisplayName())).reversed();
+                return NAME_DESC_COMPARATOR;
             case LAST_ONLINE:
                 // Recent first; never-seen accounts sink to the bottom
                 return (a, b) -> Long.compare(lastOnline(b), lastOnline(a));
@@ -196,11 +223,6 @@ public class AccountListBuilder
             default:
                 return AccountData.SORT_ORDER_COMPARATOR;
         }
-    }
-
-    private static String safeLower(String s)
-    {
-        return s == null ? "" : s.toLowerCase();
     }
 
     private static long lastOnline(Account a)
@@ -228,15 +250,14 @@ public class AccountListBuilder
             return new ArrayList<>(profiles);
         }
 
+        // Account.getSearchHaystack() returns a cached lowercase concatenation of
+        // the searchable fields, rebuilt only when the account changes. Previously
+        // this was 3× toLowerCase per card per keystroke — at 100 accounts and a
+        // 10-char query, that's 3000 throwaway String allocations.
         List<Account> filtered = new ArrayList<>();
         for (Account profile : profiles)
         {
-            String alias = profile.getAlias() != null ? profile.getAlias().toLowerCase() : "";
-            String username = profile.getUsername() != null ? profile.getUsername().toLowerCase() : "";
-            String notes = profile.getMetadata() != null && profile.getMetadata().getNotes() != null
-                ? profile.getMetadata().getNotes().toLowerCase() : "";
-
-            if (alias.contains(searchFilter) || username.contains(searchFilter) || notes.contains(searchFilter))
+            if (profile.getSearchHaystack().contains(searchFilter))
             {
                 filtered.add(profile);
             }
