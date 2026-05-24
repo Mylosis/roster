@@ -13,7 +13,7 @@ public final class Theme
     private Theme() {} // Prevent instantiation
 
     /** Plugin version string displayed in the UI header. */
-    public static final String VERSION = "1.0";
+    public static final String VERSION = "1.1";
 
     // Base colors
     public static final Color BACKGROUND = ColorScheme.DARK_GRAY_COLOR;

@@ -1,6 +1,7 @@
 package com.mylosis.roster;
 
 import com.mylosis.roster.model.ImportDuplicateMode;
+import com.mylosis.roster.model.SortKey;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
@@ -46,6 +47,18 @@ public interface RosterConfig extends Config
         return false;
     }
 
+    @ConfigItem(
+        keyName = "sortKey",
+        name = "Sort accounts by",
+        description = "Sort order for accounts within each category. Manual preserves drag order.",
+        section = displaySection,
+        position = 1
+    )
+    default SortKey sortKey()
+    {
+        return SortKey.MANUAL;
+    }
+
     // Privacy settings
 
     @ConfigItem(
@@ -80,6 +93,18 @@ public interface RosterConfig extends Config
         position = 2
     )
     default boolean hideAlias()
+    {
+        return false;
+    }
+
+    @ConfigItem(
+        keyName = "hideLastOnline",
+        name = "Hide Last Online",
+        description = "Hide the 'logged in X ago' stamp on account cards",
+        section = privacySection,
+        position = 3
+    )
+    default boolean hideLastOnline()
     {
         return false;
     }

@@ -1,6 +1,6 @@
-# Roster
+# [Roster](https://github.com/Mylosis/roster)
 
-A RuneLite plugin for managing multiple OSRS accounts. Organize your mains, alts, and pures into color-coded categories, switch between them with a single click, and keep everything stored locally on your machine or synced with RL. Inspired by [Profiles Plugin.](https://runelite.net/plugin-hub/show/profiles-panel)
+A RuneLite plugin for managing multiple OSRS accounts. Organize your mains, alts, and pures into color-coded categories, switch between them with a single click, and have everything cloud-sync across your machines via your RuneLite account. Inspired by [Profiles Plugin.](https://runelite.net/plugin-hub/show/profiles-panel)
 
 ## Features
 
@@ -13,7 +13,10 @@ A RuneLite plugin for managing multiple OSRS accounts. Organize your mains, alts
 - **Online Indicator**: Green dot shows which account is logged in on the current client
 - **Search**: Filter accounts by name, username, or notes
 - **Drag & Drop**: Reorder accounts and move them between categories
-- **Local Storage**: Data is locally stored
+- **Account Type Badges**: Mark each account as Ironman, HCIM, UIM, GIM, UGIM, Skiller, Pure, or Main — click any badge to change it on the fly
+- **Sort Options**: Sort each list by name, last online, date added, or your manual drag order
+- **Last Online**: Cards show when each account was last seen logged in on this client
+- **Cloud Sync**: Account data syncs across your machines via your RuneLite account (with a local backup retained too)
 
 ## Usage
 
@@ -43,9 +46,11 @@ A RuneLite plugin for managing multiple OSRS accounts. Organize your mains, alts
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Grid View | Compact two-column grid layout | Off |
+| Sort accounts by | Manual / Name / Last online / Date added | Manual |
 | Hide Login | Hide login/username on cards | Off |
 | Hide Notes | Hide notes on cards | Off |
 | Hide Alias | Hide alias, show login only | Off |
+| Hide Last Online | Hide the "logged in X ago" stamp on cards | Off |
 | Confirm Delete | Confirmation dialog for deletions | On |
 | Import Handling | How to handle duplicate imports (Skip/Overwrite/Add Suffix) | Skip |
 
@@ -84,6 +89,13 @@ Requires JDK 11 or higher.
 BSD 2-Clause License
 
 ## Changelog
+
+### v1.1.0
+- **Cloud sync** — account data now persists through RuneLite's ConfigManager, so it travels with your RuneLite account across machines. Existing `roster.json` data is migrated automatically on first launch (original file preserved as `roster.json.pre-v1.1.bak`).
+- **Account type badges** — small clickable badge on each card shows whether the account is an Ironman variant, Skiller, Pure, etc. New accounts pick a type from a dropdown in the Add form; existing accounts can be changed by clicking the badge directly.
+- **Sort options** — new ⇵ button in the header lets you sort accounts by name, last online, or date added. Manual sort preserves your hand-arranged drag order.
+- **Last online tracking** — cards show "logged in X ago" for accounts that aren't currently online, auto-stamped when an account logs in on the current client.
+- New privacy toggle to hide the last-online stamp.
 
 ### v1.0.0
 - Initial release

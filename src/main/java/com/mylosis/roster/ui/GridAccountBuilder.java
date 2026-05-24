@@ -2,6 +2,9 @@ package com.mylosis.roster.ui;
 
 import com.mylosis.roster.RosterPlugin;
 import com.mylosis.roster.model.Account;
+import com.mylosis.roster.model.AccountMetadata;
+import com.mylosis.roster.model.AccountType;
+import com.mylosis.roster.ui.components.AccountTypeBadge;
 import com.mylosis.roster.ui.components.Theme;
 
 import javax.swing.*;
@@ -33,13 +36,18 @@ public class GridAccountBuilder
 
         String displayName = AccountCardHelper.resolveDisplayName(profile, plugin.getConfig());
 
-        JLabel nameLabel = new JLabel(truncate(displayName, 14));
+        // Name + clickable type badge, centered as a unit
+        JPanel nameRow = new JPanel(new FlowLayout(FlowLayout.CENTER, Theme.SPACING_XS, 0));
+        nameRow.setOpaque(false);
+        nameRow.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        JLabel nameLabel = new JLabel(truncate(displayName, 12));
         nameLabel.setForeground(Theme.TEXT_PRIMARY);
         nameLabel.setFont(Theme.fontBold(card.getFont(), Theme.FONT_SIZE_BODY));
-        nameLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
-        nameLabel.setHorizontalAlignment(SwingConstants.CENTER);
-        if (displayName.length() > 14) nameLabel.setToolTipText(displayName);
-        inner.add(nameLabel);
+        if (displayName.length() > 12) nameLabel.setToolTipText(displayName);
+        nameRow.add(nameLabel);
+        nameRow.add(createGridBadge(plugin, profile));
+        inner.add(nameRow);
 
         String subtitle = getSubtitle(plugin, profile);
         if (subtitle != null)
@@ -94,11 +102,32 @@ public class GridAccountBuilder
         card.add(spacer, BorderLayout.WEST);
     }
 
+    private static AccountTypeBadge createGridBadge(RosterPlugin plugin, Account profile)
+    {
+        AccountType current = (profile.getMetadata() != null
+            && profile.getMetadata().getAccountType() != null)
+            ? profile.getMetadata().getAccountType()
+            : AccountType.MAIN;
+        // Slightly smaller than the list-view badge to fit the compact grid card
+        return new AccountTypeBadge(current, 12, newType ->
+        {
+            AccountMetadata meta = profile.getMetadata();
+            if (meta == null)
+            {
+                meta = AccountMetadata.createDefault();
+                profile.setMetadata(meta);
+            }
+            meta.setAccountType(newType);
+            plugin.getAccountStorage().saveAccount(profile);
+        });
+    }
+
     private static String getSubtitle(RosterPlugin plugin, Account profile)
     {
         boolean hideNotes = plugin.getConfig().hideNotes();
         boolean hideLogin = plugin.getConfig().hideLogin();
         boolean hideAlias = plugin.getConfig().hideAlias();
+        boolean hideLastOnline = plugin.getConfig().hideLastOnline();
 
         if (!hideNotes && profile.getMetadata() != null && profile.getMetadata().getNotes() != null
             && !profile.getMetadata().getNotes().isEmpty())
@@ -109,6 +138,12 @@ public class GridAccountBuilder
             && !profile.getUsername().equals(profile.getAlias()))
         {
             return profile.getUsername();
+        }
+        // Fall back to "X ago" when there's nothing more useful to show.
+        if (!hideLastOnline && profile.getMetadata() != null
+            && profile.getMetadata().getLastOnlineAt() != null)
+        {
+            return AccountCardHelper.formatTimeAgo(profile.getMetadata().getLastOnlineAt());
         }
         return null;
     }

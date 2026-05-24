@@ -4,6 +4,8 @@ import com.mylosis.roster.RosterConfig;
 import com.mylosis.roster.RosterPlugin;
 import com.mylosis.roster.model.Account;
 import com.mylosis.roster.model.AccountMetadata;
+import com.mylosis.roster.model.AccountType;
+import com.mylosis.roster.ui.components.AccountTypeBadge;
 import com.mylosis.roster.ui.components.InlineAccountForm;
 import com.mylosis.roster.ui.components.Theme;
 import lombok.Getter;
@@ -110,20 +112,20 @@ public class AccountCardPanel extends JPanel
         String loggedIn = plugin.getLoggedInDisplayName();
         boolean isOnline = loggedIn != null && displayName != null && loggedIn.equalsIgnoreCase(profile.getDisplayName());
 
+        // Always render in a row so we can fit the type badge alongside the name.
+        JPanel nameRow = new JPanel(new FlowLayout(FlowLayout.LEFT, Theme.SPACING_XS, 0));
+        nameRow.setOpaque(false);
         if (isOnline)
         {
-            JPanel nameRow = new JPanel(new FlowLayout(FlowLayout.LEFT, Theme.SPACING_XS, 0));
-            nameRow.setOpaque(false);
             nameRow.add(AccountCardHelper.createOnlineDot());
-            nameRow.add(AccountCardHelper.createTruncatingLabel(displayName, Theme.TEXT_PRIMARY,
-                Theme.fontBold(getFont(), Theme.FONT_SIZE_HEADING), 14));
-            infoPanel.add(nameRow, gbc);
         }
-        else
-        {
-            infoPanel.add(AccountCardHelper.createTruncatingLabel(displayName, Theme.TEXT_PRIMARY,
-                Theme.fontBold(getFont(), Theme.FONT_SIZE_HEADING), 16), gbc);
-        }
+        // Truncate slightly shorter to leave room for the badge — keeps the
+        // common case (online + Main placeholder) from clipping.
+        int nameMax = isOnline ? 13 : 15;
+        nameRow.add(AccountCardHelper.createTruncatingLabel(displayName, Theme.TEXT_PRIMARY,
+            Theme.fontBold(getFont(), Theme.FONT_SIZE_HEADING), nameMax));
+        nameRow.add(createTypeBadge());
+        infoPanel.add(nameRow, gbc);
         gbc.gridy++;
 
         // Username (shown if not hidden and different from display name)
@@ -149,10 +151,58 @@ public class AccountCardPanel extends JPanel
                     Theme.fontRegular(getFont(), Theme.FONT_SIZE_BODY), 22);
                 notesLabel.setToolTipText("<html><body style='width: 200px'>" + AccountCardHelper.escapeHtml(notes) + "</body></html>");
                 infoPanel.add(notesLabel, gbc);
+                gbc.gridy++;
+            }
+        }
+
+        // Last-online stamp (suppressed while the account is currently logged in —
+        // the green online dot already conveys that, and "just now" would be misleading
+        // once they've been online for hours).
+        if (!isOnline && !config.hideLastOnline())
+        {
+            AccountMetadata meta = profile.getMetadata();
+            if (meta != null && meta.getLastOnlineAt() != null)
+            {
+                String relative = AccountCardHelper.formatTimeAgo(meta.getLastOnlineAt());
+                if (relative != null)
+                {
+                    JLabel lastOnlineLabel = new JLabel(relative);
+                    lastOnlineLabel.setForeground(Theme.TEXT_MUTED);
+                    lastOnlineLabel.setFont(Theme.fontRegular(getFont(), Theme.FONT_SIZE_TINY));
+                    lastOnlineLabel.setToolTipText("Last seen logged in on this client");
+                    infoPanel.add(lastOnlineLabel, gbc);
+                }
             }
         }
 
         return infoPanel;
+    }
+
+    /**
+     * Creates the clickable type badge that appears beside the account name.
+     * Clicking it opens a popup that lets the user change the account's type
+     * without opening the full edit form.
+     */
+    private AccountTypeBadge createTypeBadge()
+    {
+        AccountType current = (profile.getMetadata() != null
+            && profile.getMetadata().getAccountType() != null)
+            ? profile.getMetadata().getAccountType()
+            : AccountType.MAIN;
+
+        return new AccountTypeBadge(current, newType ->
+        {
+            AccountMetadata meta = profile.getMetadata();
+            if (meta == null)
+            {
+                meta = AccountMetadata.createDefault();
+                profile.setMetadata(meta);
+            }
+            meta.setAccountType(newType);
+            plugin.getAccountStorage().saveAccount(profile);
+            // The ConfigChanged handler will trigger a panel rebuild, picking up
+            // the new badge styling — no explicit rebuild needed here.
+        });
     }
 
     private JPanel createActionButtons()

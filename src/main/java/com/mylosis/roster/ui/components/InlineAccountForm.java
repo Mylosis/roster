@@ -2,6 +2,7 @@ package com.mylosis.roster.ui.components;
 
 import com.mylosis.roster.RosterPlugin;
 import com.mylosis.roster.model.Account;
+import com.mylosis.roster.model.AccountType;
 import com.mylosis.roster.model.ProfileGroup;
 import com.mylosis.roster.model.AccountMetadata;
 import com.mylosis.roster.ui.GroupComboItem;
@@ -28,6 +29,9 @@ public class InlineAccountForm extends JPanel
     private JTextField aliasField;
     private JTextField notesField;
     private JComboBox<GroupComboItem> categoryCombo;
+    // Only present when creating a new account (existingAccount == null).
+    // Editing existing accounts changes type via the card's clickable badge.
+    private JComboBox<AccountType> typeCombo;
 
     @Setter
     private Consumer<Account> onSave;
@@ -71,6 +75,20 @@ public class InlineAccountForm extends JPanel
             categoryCombo.setMaximumSize(new Dimension(Integer.MAX_VALUE, Theme.BUTTON_HEIGHT));
             populateCategories();
             add(createFieldRow("Category", categoryCombo));
+            add(Box.createVerticalStrut(Theme.SPACING_XS));
+        }
+
+        // Type dropdown — shown only when creating a new account.
+        // For existing accounts the badge on the card is the change affordance.
+        if (existingAccount == null)
+        {
+            typeCombo = new JComboBox<>(AccountType.values());
+            typeCombo.setBackground(Theme.BACKGROUND_DARKER);
+            typeCombo.setForeground(Theme.TEXT_PRIMARY);
+            typeCombo.setMaximumSize(new Dimension(Integer.MAX_VALUE, Theme.BUTTON_HEIGHT));
+            typeCombo.setRenderer(new AccountTypeComboRenderer());
+            typeCombo.setSelectedItem(AccountType.MAIN);
+            add(createFieldRow("Type", typeCombo));
             add(Box.createVerticalStrut(Theme.SPACING_XS));
         }
 
@@ -267,6 +285,16 @@ public class InlineAccountForm extends JPanel
             profile.setMetadata(meta);
         }
         meta.setNotes(notes.isEmpty() ? null : notes);
+        // Type only flows through the form for new accounts; existing accounts
+        // change type via the card badge popover.
+        if (typeCombo != null)
+        {
+            AccountType selectedType = (AccountType) typeCombo.getSelectedItem();
+            if (selectedType != null)
+            {
+                meta.setAccountType(selectedType);
+            }
+        }
     }
 
     private void doCancel()
@@ -288,6 +316,10 @@ public class InlineAccountForm extends JPanel
         {
             categoryCombo.setSelectedIndex(0);
         }
+        if (typeCombo != null)
+        {
+            typeCombo.setSelectedItem(AccountType.MAIN);
+        }
         // Reset username field border in case it was highlighted as error
         usernameField.setBorder(BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(Theme.CARD_BORDER),
@@ -295,4 +327,27 @@ public class InlineAccountForm extends JPanel
         ));
     }
 
+    /**
+     * Renders each AccountType in the dropdown with its badge swatch alongside the label.
+     * Mirrors the popover that opens when clicking a card badge, so the visual mapping
+     * is the same in both places.
+     */
+    private static class AccountTypeComboRenderer extends DefaultListCellRenderer
+    {
+        @Override
+        public Component getListCellRendererComponent(JList<?> list, Object value, int index,
+                                                      boolean isSelected, boolean cellHasFocus)
+        {
+            super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+            if (value instanceof AccountType)
+            {
+                AccountType t = (AccountType) value;
+                setText(t.getDisplayName());
+                setIcon(AccountTypeBadge.swatchIcon(t, 12));
+                setIconTextGap(8);
+                setBorder(new EmptyBorder(2, 4, 2, 4));
+            }
+            return this;
+        }
+    }
 }

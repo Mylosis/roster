@@ -3,6 +3,7 @@ package com.mylosis.roster;
 import com.google.gson.Gson;
 import com.google.inject.Provides;
 import com.mylosis.roster.model.Account;
+import com.mylosis.roster.model.AccountMetadata;
 import com.mylosis.roster.storage.ImportExportService;
 import com.mylosis.roster.storage.AccountStorage;
 import com.mylosis.roster.ui.RosterPanel;
@@ -146,6 +147,7 @@ public class RosterPlugin extends Plugin
                 }
                 loggedInDisplayName = client.getLocalPlayer().getName();
                 log.debug("Detected logged-in player: {}", loggedInDisplayName);
+                stampLastOnline(loggedInDisplayName);
                 SwingUtilities.invokeLater(() -> {
                     if (panel != null) panel.rebuild();
                 });
@@ -205,6 +207,51 @@ public class RosterPlugin extends Plugin
     public RosterPanel getPanel()
     {
         return panel;
+    }
+
+    /**
+     * Stamps {@code lastOnlineAt} on the account whose display name matches the freshly
+     * detected character name. Throttled to one write per 60 seconds per account to avoid
+     * save thrash during game state churn (e.g. world hops). Matching is case-insensitive
+     * against the account's display name (alias if set, otherwise login name).
+     */
+    private static final long LAST_ONLINE_THROTTLE_MS = 60_000L;
+
+    private void stampLastOnline(String displayName)
+    {
+        if (displayName == null || accountStorage == null)
+        {
+            return;
+        }
+        Account matched = null;
+        for (Account a : accountStorage.getAccounts())
+        {
+            String name = a.getDisplayName();
+            if (name != null && displayName.equalsIgnoreCase(name))
+            {
+                matched = a;
+                break;
+            }
+        }
+        if (matched == null)
+        {
+            return;
+        }
+        AccountMetadata meta = matched.getMetadata();
+        if (meta == null)
+        {
+            meta = AccountMetadata.createDefault();
+            matched.setMetadata(meta);
+        }
+        long now = System.currentTimeMillis();
+        Long previous = meta.getLastOnlineAt();
+        if (previous != null && (now - previous) < LAST_ONLINE_THROTTLE_MS)
+        {
+            return;
+        }
+        meta.setLastOnlineAt(now);
+        accountStorage.saveAccount(matched);
+        log.debug("Stamped lastOnlineAt for {}", matched.getDisplayName());
     }
 
     @Provides

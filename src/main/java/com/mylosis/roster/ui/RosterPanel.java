@@ -1,5 +1,6 @@
 package com.mylosis.roster.ui;
 
+import com.mylosis.roster.RosterConfig;
 import com.mylosis.roster.RosterPlugin;
 import com.mylosis.roster.storage.AccountStorage;
 import com.mylosis.roster.ui.components.NotificationToast;
@@ -91,7 +92,13 @@ public class RosterPanel extends PluginPanel
         JPanel headerPanel = headerBuilder.build(
             filter -> { searchFilter = filter; rebuild(); },
             () -> formManager.toggleAddProfileForm(this::collapseExpandedCardOnly),
-            () -> formManager.toggleAddCategoryForm(this::collapseExpandedCardOnly)
+            () -> formManager.toggleAddCategoryForm(this::collapseExpandedCardOnly),
+            () -> plugin.getConfig().sortKey(),
+            newKey -> {
+                plugin.getConfigManager().setConfiguration(
+                    RosterConfig.CONFIG_GROUP, "sortKey", newKey);
+                // onConfigChanged will trigger the rebuild
+            }
         );
 
         // Attach form panels below action buttons

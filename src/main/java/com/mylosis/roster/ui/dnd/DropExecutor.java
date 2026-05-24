@@ -4,7 +4,9 @@ import com.mylosis.roster.RosterPlugin;
 import com.mylosis.roster.model.Account;
 import com.mylosis.roster.model.AccountData;
 import com.mylosis.roster.model.ProfileGroup;
+import com.mylosis.roster.model.SortKey;
 import com.mylosis.roster.ui.RosterPanel;
+import com.mylosis.roster.ui.components.NotificationToast;
 import lombok.extern.slf4j.Slf4j;
 
 import javax.swing.*;
@@ -29,6 +31,11 @@ public class DropExecutor
 
     /**
      * Perform a profile drop (move to category or reorder).
+     *
+     * <p>If a non-MANUAL sort key is active, dragging still records the new
+     * {@code sortOrder} so the user's drag intent is preserved — but the visible
+     * order won't change until they switch back to MANUAL. We surface a toast
+     * the first time this happens so users aren't confused by "nothing happened".
      */
     public void executeProfileDrop(DragDropManager.DropTarget target, Account draggedAccount)
     {
@@ -52,10 +59,36 @@ public class DropExecutor
         else if (insertIndex >= 0)
         {
             reorderProfileInCategory(currentGroupId, draggedAccount, insertIndex);
+            notifyIfSortOverridden();
             SwingUtilities.invokeLater(() -> panel.rebuild());
             log.debug("Reordered account {} to position {} in category {}",
                 draggedAccount.getDisplayName(), insertIndex, currentGroupId);
         }
+    }
+
+    /**
+     * If a non-MANUAL sort is active, the drag has updated {@code sortOrder} but the
+     * visible position won't change. Tell the user once per session so the lack of
+     * visible movement doesn't read as a broken drag.
+     */
+    private boolean shownSortOverrideHint = false;
+
+    private void notifyIfSortOverridden()
+    {
+        if (shownSortOverrideHint)
+        {
+            return;
+        }
+        SortKey active = plugin.getConfig().sortKey();
+        if (active == SortKey.MANUAL)
+        {
+            return;
+        }
+        shownSortOverrideHint = true;
+        SwingUtilities.invokeLater(() ->
+            panel.showNotification(
+                "Drag order saved — switch to Manual sort to see it",
+                NotificationToast.Type.INFO));
     }
 
     /**

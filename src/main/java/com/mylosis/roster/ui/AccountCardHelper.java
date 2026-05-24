@@ -92,6 +92,37 @@ public final class AccountCardHelper
     }
 
     /**
+     * Formats a millisecond timestamp as a coarse relative-time string
+     * (e.g. "just now", "5m ago", "3h ago", "2d ago", "4mo ago", "1y ago").
+     * Returns null for null or future-dated input.
+     */
+    public static String formatTimeAgo(Long epochMillis)
+    {
+        if (epochMillis == null)
+        {
+            return null;
+        }
+        long diff = System.currentTimeMillis() - epochMillis;
+        if (diff < 0)
+        {
+            return null;
+        }
+
+        long minute = 60_000L;
+        long hour = 60 * minute;
+        long day = 24 * hour;
+        long month = 30 * day;
+        long year = 365 * day;
+
+        if (diff < 2 * minute) return "just now";
+        if (diff < hour)       return (diff / minute) + "m ago";
+        if (diff < day)        return (diff / hour)   + "h ago";
+        if (diff < month)      return (diff / day)    + "d ago";
+        if (diff < year)       return (diff / month)  + "mo ago";
+        return (diff / year) + "y ago";
+    }
+
+    /**
      * Resolves the display name for a profile based on privacy settings.
      * Used by both AccountCardPanel (list view) and GridAccountBuilder (grid view).
      */

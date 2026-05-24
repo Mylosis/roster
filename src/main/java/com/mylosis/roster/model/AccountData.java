@@ -18,7 +18,23 @@ public class AccountData
     private List<Account> accounts;
     private List<ProfileGroup> groups;
 
-    public static final int CURRENT_VERSION = 1;
+    /**
+     * Schema version. Bumped to 2 in v1.1 alongside the move to ConfigManager-backed
+     * storage and the addition of {@code AccountMetadata.lastOnlineAt}. New fields on
+     * existing classes are backwards-compatible via Gson (missing → null/default), so
+     * the migrate() hook below is currently a no-op — present so future schema changes
+     * have a defined entry point.
+     */
+    public static final int CURRENT_VERSION = 2;
+
+    /**
+     * Forward-migrates this instance in place from {@code oldVersion} to {@link #CURRENT_VERSION}.
+     * Currently a no-op for all known versions; reserved for future schema changes.
+     */
+    public void migrate(int oldVersion)
+    {
+        // v1 → v2: no destructive changes, added field is nullable. Nothing to do.
+    }
 
     /**
      * Shared comparator for sorting accounts by their metadata sort order.

@@ -4,11 +4,14 @@ import com.mylosis.roster.RosterPlugin;
 import com.mylosis.roster.model.Account;
 import com.mylosis.roster.model.AccountData;
 import com.mylosis.roster.model.ProfileGroup;
+import com.mylosis.roster.model.SortKey;
 import com.mylosis.roster.storage.AccountStorage;
 import com.mylosis.roster.ui.components.Icons;
 import com.mylosis.roster.ui.components.Theme;
 import com.mylosis.roster.ui.dnd.DragDropManager;
 import com.mylosis.roster.ui.dnd.AccountDragListener;
+
+import java.util.Comparator;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -163,9 +166,59 @@ public class AccountListBuilder
         }
     }
 
+    /**
+     * Sort the profile list by the currently-active SortKey. MANUAL falls back to the
+     * explicit per-account {@code sortOrder} (drag order), preserving v1.0 behaviour.
+     * Non-manual keys never touch {@code sortOrder} — they sort a copy in place, so
+     * switching back to MANUAL restores the user's hand-arranged drag order verbatim.
+     */
     private void sortBySortOrder(List<Account> profiles)
     {
-        profiles.sort(AccountData.SORT_ORDER_COMPARATOR);
+        SortKey key = plugin.getConfig().sortKey();
+        profiles.sort(comparatorFor(key));
+    }
+
+    private static Comparator<Account> comparatorFor(SortKey key)
+    {
+        switch (key)
+        {
+            case NAME_ASC:
+                return Comparator.comparing(a -> safeLower(a.getDisplayName()));
+            case NAME_DESC:
+                return Comparator.comparing((Account a) -> safeLower(a.getDisplayName())).reversed();
+            case LAST_ONLINE:
+                // Recent first; never-seen accounts sink to the bottom
+                return (a, b) -> Long.compare(lastOnline(b), lastOnline(a));
+            case DATE_ADDED:
+                // Newest first; pre-v1.1 accounts (no createdAt) sink to the bottom
+                return (a, b) -> Long.compare(createdAt(b), createdAt(a));
+            case MANUAL:
+            default:
+                return AccountData.SORT_ORDER_COMPARATOR;
+        }
+    }
+
+    private static String safeLower(String s)
+    {
+        return s == null ? "" : s.toLowerCase();
+    }
+
+    private static long lastOnline(Account a)
+    {
+        if (a.getMetadata() == null || a.getMetadata().getLastOnlineAt() == null)
+        {
+            return Long.MIN_VALUE;
+        }
+        return a.getMetadata().getLastOnlineAt();
+    }
+
+    private static long createdAt(Account a)
+    {
+        if (a.getMetadata() == null || a.getMetadata().getCreatedAt() == null)
+        {
+            return Long.MIN_VALUE;
+        }
+        return a.getMetadata().getCreatedAt();
     }
 
     private List<Account> filterProfiles(List<Account> profiles, String searchFilter)
