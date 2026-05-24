@@ -92,6 +92,10 @@ BSD 2-Clause License
 
 ## Changelog
 
+### v1.1.2
+- **Fix: mouse-wheel scroll on the panel.** RuneLite's `PluginPanel` default constructor wraps your content in its own `JScrollPane`. Combined with the panel's inner scroll pane this produced a dead scroll wheel everywhere except the narrow scrollbar strip itself — the inner viewport sized to the full content height and never needed to scroll, so wheel events landed on it as no-ops. Now passes `false` to `super()` so we own the scrolling end-to-end. Bonus: the search/+Account/+Category header and the footer (account count, mode buttons) now stay pinned while only the card list scrolls.
+- Plugin-hub preview GIF added to the README.
+
 ### v1.1.1
 - **Fix: account data loss on first v1.1 upgrade.** The migration in v1.1.0 renamed `roster.json` to a backup file after handing the data to ConfigManager. ConfigManager batches its writes, so if RuneLite was closed before its debounced flush hit disk, the in-memory data was lost — and the file backup had been renamed away. Migration is now **idempotent**: the file is never renamed, so a future ConfigManager loss can always re-seed from the same place. Recovery path checks `roster.json` → `roster.backup.json` → `roster.json.pre-v1.1.bak` so users who already hit the v1.1.0 bug get their data back automatically on the next launch.
 - **Account type icons** — replaced the letter-in-circle badges with the actual OSRS sprites: official chat badges for the six Ironman variants, an Abyssal whip for Main, the in-game Skills tab icon for Skiller, and a Granite maul for Pure.
