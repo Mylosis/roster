@@ -187,6 +187,17 @@ public class NotificationToast extends JPanel
         fadeTimer.start();
     }
 
+    /**
+     * Hard-stops both timers. Called when the toast is yanked from its parent
+     * (replaced by a newer toast) — otherwise the orphaned fade timer keeps
+     * firing 16ms repaints against a parentless component until it finishes.
+     */
+    public void stopTimers()
+    {
+        dismissTimer.stop();
+        fadeTimer.stop();
+    }
+
     private static String escapeHtml(String text)
     {
         if (text == null) return "";

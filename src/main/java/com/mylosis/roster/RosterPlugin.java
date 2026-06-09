@@ -147,6 +147,13 @@ public class RosterPlugin extends Plugin
         {
             // Player object may not be available immediately — retries on next game tick
             clientThread.invokeLater(() -> {
+                if (client.getGameState() != GameState.LOGGED_IN)
+                {
+                    // Logged out again before the player resolved — abandon the
+                    // retry, or this closure re-runs every frame for the rest
+                    // of the session (and each LOGGED_IN stacks another one).
+                    return true;
+                }
                 if (client.getLocalPlayer() == null || client.getLocalPlayer().getName() == null)
                 {
                     return false;
@@ -255,7 +262,7 @@ public class RosterPlugin extends Plugin
             String previousId = selectedAccountId;
             selectedAccountId = profile.getId();
 
-            log.debug("Selected account: {}", profile.getDisplayName());
+            log.debug("Selected account: {}", profile.getId());
 
             if (panel != null)
             {
@@ -320,7 +327,7 @@ public class RosterPlugin extends Plugin
         }
         meta.setLastOnlineAt(now);
         accountStorage.saveAccount(matched);
-        log.debug("Stamped lastOnlineAt for {}", matched.getDisplayName());
+        log.debug("Stamped lastOnlineAt for {}", matched.getId());
     }
 
     @Provides

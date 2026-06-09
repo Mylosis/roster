@@ -108,7 +108,15 @@ public class RosterPanel extends PluginPanel
         // Header with search and action buttons
         PanelHeaderBuilder headerBuilder = new PanelHeaderBuilder();
         JPanel headerPanel = headerBuilder.build(
-            filter -> { searchFilter = filter; rebuild(); },
+            filter -> {
+                // The debounce can fire with unchanged text (type then delete
+                // within the window) — don't pay a full rebuild for a no-op.
+                if (!filter.equals(searchFilter))
+                {
+                    searchFilter = filter;
+                    rebuild();
+                }
+            },
             () -> formManager.toggleAddProfileForm(this::collapseExpandedCardOnly),
             () -> formManager.toggleAddCategoryForm(this::collapseExpandedCardOnly),
             () -> plugin.getConfig().sortKey(),
@@ -234,6 +242,16 @@ public class RosterPanel extends PluginPanel
     public void showNotification(String message, NotificationToast.Type type)
     {
         NotificationToast toast = new NotificationToast(message, type, 3000);
+        // Stop the previous toast's fade/dismiss timers before discarding it —
+        // removeAll() alone leaves them firing 16ms repaints against a
+        // parentless component for up to ~3.5s.
+        for (Component c : notificationPanel.getComponents())
+        {
+            if (c instanceof NotificationToast)
+            {
+                ((NotificationToast) c).stopTimers();
+            }
+        }
         notificationPanel.removeAll();
         notificationPanel.add(toast);
         notificationPanel.revalidate();
@@ -291,8 +309,18 @@ public class RosterPanel extends PluginPanel
         AccountCardPanel card = cardsByAccountId.get(accountId);
         if (card == null)
         {
-            // Not visible — full rebuild is a safe fallback that costs us nothing
-            // here because the user isn't looking at the card anyway.
+            // Not visible. If the account exists but is merely filtered out by
+            // the active search, a rebuild would produce the identical view —
+            // skip it (login/logout events during a search hit this path).
+            if (!searchFilter.isEmpty())
+            {
+                com.mylosis.roster.model.Account account = storage.getProfile(accountId);
+                if (account != null && !account.getSearchHaystack().contains(searchFilter))
+                {
+                    return;
+                }
+            }
+            // Genuinely unknown card — full rebuild is the safe fallback.
             rebuild();
             return;
         }

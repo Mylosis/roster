@@ -32,6 +32,17 @@ public class DragOverlay extends JComponent
     private static final BasicStroke STROKE_FALLBACK_ARROW = new BasicStroke(
         2, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
 
+    // Same story for the colors and the ghost composite — all constant, all
+    // previously allocated per frame. AWT only caches AlphaComposite instances
+    // for alpha == 1.0, so the 0.85f ghost composite is worth holding onto.
+    private static final Color GHOST_SHADOW = new Color(0, 0, 0, 30);
+    private static final Color HIGHLIGHT_FILL = new Color(Theme.BUTTON_PRIMARY.getRed(),
+        Theme.BUTTON_PRIMARY.getGreen(), Theme.BUTTON_PRIMARY.getBlue(), 40);
+    private static final Color INDICATOR_FILL = new Color(Theme.BUTTON_PRIMARY.getRed(),
+        Theme.BUTTON_PRIMARY.getGreen(), Theme.BUTTON_PRIMARY.getBlue(), 100);
+    private static final AlphaComposite GHOST_COMPOSITE =
+        AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.85f);
+
     public DragOverlay(DragDropManager dragManager)
     {
         this.dragManager = dragManager;
@@ -42,11 +53,19 @@ public class DragOverlay extends JComponent
     {
         if (screenPoint != null && getParent() != null)
         {
-            Point parentLocation = getParent().getLocationOnScreen();
-            this.mouseLocation = new Point(
-                screenPoint.x - parentLocation.x,
-                screenPoint.y - parentLocation.y
-            );
+            try
+            {
+                Point parentLocation = getParent().getLocationOnScreen();
+                this.mouseLocation = new Point(
+                    screenPoint.x - parentLocation.x,
+                    screenPoint.y - parentLocation.y
+                );
+            }
+            catch (IllegalComponentStateException e)
+            {
+                // Parent no longer showing (panel closed mid-drag)
+                this.mouseLocation = null;
+            }
         }
         else
         {
@@ -117,15 +136,15 @@ public class DragOverlay extends JComponent
             int y = mouseLocation.y - dragImageHeight / 2;
 
             // Draw shadow
-            g2d.setColor(new Color(0, 0, 0, 30));
+            g2d.setColor(GHOST_SHADOW);
             g2d.fillRoundRect(x + 4, y + 4, dragImageWidth, dragImageHeight, 8, 8);
 
             // Draw semi-transparent image
-            g2d.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.85f));
+            g2d.setComposite(GHOST_COMPOSITE);
             g2d.drawImage(dragImage, x, y, null);
 
             // Draw border
-            g2d.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 1.0f));
+            g2d.setComposite(AlphaComposite.SrcOver);
             g2d.setColor(Theme.BUTTON_PRIMARY);
             g2d.setStroke(STROKE_GHOST_BORDER);
             g2d.drawRoundRect(x, y, dragImageWidth - 1, dragImageHeight - 1, 8, 8);
@@ -153,9 +172,7 @@ public class DragOverlay extends JComponent
             int height = bounds.height;
 
             // Draw highlight background
-            g2d.setColor(new Color(Theme.BUTTON_PRIMARY.getRed(),
-                Theme.BUTTON_PRIMARY.getGreen(),
-                Theme.BUTTON_PRIMARY.getBlue(), 40));
+            g2d.setColor(HIGHLIGHT_FILL);
             g2d.fillRoundRect(x, y, width, height, 6, 6);
 
             // Draw highlight border
@@ -230,9 +247,7 @@ public class DragOverlay extends JComponent
         int x = mouseLocation.x - size / 2;
         int y = mouseLocation.y - size / 2;
 
-        g2d.setColor(new Color(Theme.BUTTON_PRIMARY.getRed(),
-            Theme.BUTTON_PRIMARY.getGreen(),
-            Theme.BUTTON_PRIMARY.getBlue(), 100));
+        g2d.setColor(INDICATOR_FILL);
         g2d.fillOval(x, y, size, size);
 
         g2d.setColor(Theme.BUTTON_PRIMARY);

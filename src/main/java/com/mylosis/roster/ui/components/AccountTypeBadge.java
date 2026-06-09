@@ -1,6 +1,7 @@
 package com.mylosis.roster.ui.components;
 
 import com.mylosis.roster.model.AccountType;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.util.ImageUtil;
 
 import javax.swing.*;
@@ -30,6 +31,7 @@ import java.util.function.Consumer;
  *
  * Resources live under {@code /com/mylosis/roster/badges/}.
  */
+@Slf4j
 public class AccountTypeBadge extends JComponent
 {
     public static final int DEFAULT_SIZE = 20;
@@ -61,7 +63,9 @@ public class AccountTypeBadge extends JComponent
         BufferedImage cached = CACHE.get(t);
         if (cached != null)
         {
-            return cached;
+            // MISSING means a previous load failed — report "no icon" so the
+            // caller paints the same grey-dot fallback it always painted.
+            return cached == MISSING ? null : cached;
         }
         String resource = RESOURCE.get(t);
         if (resource == null)
@@ -76,9 +80,19 @@ public class AccountTypeBadge extends JComponent
         }
         catch (Exception e)
         {
+            // Negative-cache the failure: paintComponent calls iconFor on
+            // every repaint, and an uncached miss meant re-attempting the
+            // resource load (and swallowing a fresh exception) per paint.
+            // MISSING is non-null so the cache hit short-circuits; painting
+            // treats it as "no icon" and draws the grey-dot fallback.
+            CACHE.put(t, MISSING);
+            log.warn("Failed to load badge icon {}", resource, e);
             return null;
         }
     }
+
+    /** Sentinel for "load failed" — see iconFor. */
+    private static final BufferedImage MISSING = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
 
     private AccountType type;
     private final int size;

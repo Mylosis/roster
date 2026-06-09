@@ -6,6 +6,8 @@ import com.google.gson.JsonSyntaxException;
 import com.mylosis.roster.model.ImportDuplicateMode;
 import com.mylosis.roster.model.Account;
 import com.mylosis.roster.model.AccountData;
+import com.mylosis.roster.model.AccountMetadata;
+import com.mylosis.roster.model.AccountType;
 import lombok.extern.slf4j.Slf4j;
 
 import javax.inject.Inject;
@@ -14,15 +16,25 @@ import java.awt.Toolkit;
 import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
+import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileReader;
-import java.io.FileWriter;
 import java.io.IOException;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 
 @Slf4j
 @Singleton
 public class ImportExportService
 {
+    /**
+     * Upper bound on accepted import JSON. Anything this size is not a roster
+     * (2 MB is thousands of accounts) — without the cap, an oversized clipboard
+     * blob gets parsed, stored, and pushed through ConfigManager's cloud sync
+     * on every subsequent save.
+     */
+    private static final int MAX_IMPORT_CHARS = 2_000_000;
+
     private final AccountStorage accountStorage;
     private final Gson gson;
 
@@ -82,6 +94,11 @@ public class ImportExportService
 
             log.debug("Clipboard content length: {} chars", json.length());
 
+            if (json.length() > MAX_IMPORT_CHARS)
+            {
+                return ImportResult.failure("Clipboard data too large to be account data");
+            }
+
             return importFromJson(json, replace, duplicateMode);
         }
         catch (JsonSyntaxException e)
@@ -101,7 +118,7 @@ public class ImportExportService
         try
         {
             AccountData exportData = accountStorage.getExportData();
-            try (FileWriter writer = new FileWriter(file))
+            try (Writer writer = Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8))
             {
                 gson.toJson(exportData, writer);
             }
@@ -126,7 +143,7 @@ public class ImportExportService
 
     public ImportResult importFromFile(File file, boolean replace, ImportDuplicateMode duplicateMode)
     {
-        try (FileReader reader = new FileReader(file))
+        try (BufferedReader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8))
         {
             AccountData importData = gson.fromJson(reader, AccountData.class);
             if (importData == null)
@@ -185,11 +202,37 @@ public class ImportExportService
             return ImportResult.failure(validationError);
         }
 
+        normalizeImportData(importData);
+
         ImportStats stats = accountStorage.importData(importData, replace, duplicateMode);
         log.info("Imported accounts: added={}, skipped={}, updated={}, groups added={}",
             stats.getAccountsAdded(), stats.getAccountsSkipped(), stats.getAccountsUpdated(), stats.getGroupsAdded());
 
         return ImportResult.success(stats);
+    }
+
+    /**
+     * Foreign JSON can carry {@code metadata: null} or an unrecognized
+     * {@code accountType} (Gson maps unknown enum constants to null). Backfill
+     * defaults so downstream UI code never NPEs on imported accounts.
+     */
+    private void normalizeImportData(AccountData data)
+    {
+        if (data.getAccounts() == null)
+        {
+            return;
+        }
+        for (Account profile : data.getAccounts())
+        {
+            if (profile.getMetadata() == null)
+            {
+                profile.setMetadata(AccountMetadata.createDefault());
+            }
+            else if (profile.getMetadata().getAccountType() == null)
+            {
+                profile.getMetadata().setAccountType(AccountType.MAIN);
+            }
+        }
     }
 
     private String validateImportData(AccountData data)

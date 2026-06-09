@@ -26,6 +26,10 @@ public class DropTargetFinder
     // for a panel with ~50 components that's ~3000 traversals per second of dragging.
     private List<CategoryPanel> snapshotCategoryPanels;
     private JPanel snapshotUncategorizedHeader;
+    // Cards per category, walked once at drag start. calculateInsertIndex runs
+    // on every mouse-moved event while hovering a category; without this it
+    // re-walked the category's whole component subtree each event.
+    private java.util.Map<CategoryPanel, List<AccountCardPanel>> snapshotCardsByCategory;
 
     public DropTargetFinder(RosterPanel panel)
     {
@@ -44,6 +48,13 @@ public class DropTargetFinder
     {
         snapshotCategoryPanels = findCategoryPanels();
         snapshotUncategorizedHeader = findUncategorizedHeader();
+        snapshotCardsByCategory = new java.util.HashMap<>();
+        for (CategoryPanel categoryPanel : snapshotCategoryPanels)
+        {
+            List<AccountCardPanel> cards = new ArrayList<>();
+            findProfileCards(categoryPanel, cards);
+            snapshotCardsByCategory.put(categoryPanel, cards);
+        }
     }
 
     /**
@@ -53,6 +64,7 @@ public class DropTargetFinder
     {
         snapshotCategoryPanels = null;
         snapshotUncategorizedHeader = null;
+        snapshotCardsByCategory = null;
     }
 
     /**
@@ -188,8 +200,14 @@ public class DropTargetFinder
      */
     int calculateInsertIndex(CategoryPanel categoryPanel, Point screenPoint)
     {
-        List<AccountCardPanel> cards = new ArrayList<>();
-        findProfileCards(categoryPanel, cards);
+        List<AccountCardPanel> cards = snapshotCardsByCategory != null
+            ? snapshotCardsByCategory.get(categoryPanel)
+            : null;
+        if (cards == null)
+        {
+            cards = new ArrayList<>();
+            findProfileCards(categoryPanel, cards);
+        }
 
         if (cards.isEmpty()) return 0;
 

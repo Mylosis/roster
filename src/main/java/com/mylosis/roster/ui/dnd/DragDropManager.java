@@ -92,7 +92,7 @@ public class DragDropManager
         overlay.setDragImage(source);
         overlay.setMouseLocation(screenPoint);
         overlay.setVisible(true);
-        log.debug("Started dragging account: {}", profile.getDisplayName());
+        log.debug("Started dragging account: {}", profile.getId());
     }
 
     public void startCategoryDrag(ProfileGroup category, Component source, Point screenPoint)
@@ -116,8 +116,8 @@ public class DragDropManager
         if (!isDragging) return;
         currentDragPoint = screenPoint;
         currentDropTarget = findDropTarget(screenPoint);
+        // setMouseLocation already repaints the overlay.
         overlay.setMouseLocation(screenPoint);
-        overlay.repaint();
     }
 
     public void endDrag(Point screenPoint)

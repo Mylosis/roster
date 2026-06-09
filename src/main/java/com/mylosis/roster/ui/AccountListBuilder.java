@@ -102,7 +102,11 @@ public class AccountListBuilder
 
         for (ProfileGroup group : groups)
         {
-            List<Account> groupProfiles = byGroup.getOrDefault(group.getId(), new ArrayList<>());
+            List<Account> groupProfiles = byGroup.get(group.getId());
+            if (groupProfiles == null)
+            {
+                groupProfiles = new ArrayList<>();
+            }
             sortBySortOrder(groupProfiles);
 
             if (!groupProfiles.isEmpty() || searchFilter.isEmpty())

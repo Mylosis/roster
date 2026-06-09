@@ -25,7 +25,10 @@ public class AccountDragListener extends MouseAdapter
     private long pressTime = 0;
     private boolean dragStarted = false;
     private static long lastClickTime = 0;
-    private static Account lastClickAccount = null;
+    // Track the account by id, not by reference: a static Account would pin
+    // the object graph across panel rebuilds and plugin restarts, and rebuilds
+    // may replace the instance, silently breaking double-click detection.
+    private static String lastClickAccountId = null;
 
     private static final int DRAG_THRESHOLD = 10;
     private static final int CLICK_TIME_THRESHOLD = 300;
@@ -94,18 +97,19 @@ public class AccountDragListener extends MouseAdapter
             {
                 // Check for double-click
                 long now = System.currentTimeMillis();
-                if (lastClickAccount == profile && (now - lastClickTime) < DOUBLE_CLICK_THRESHOLD)
+                if (profile.getId() != null && profile.getId().equals(lastClickAccountId)
+                    && (now - lastClickTime) < DOUBLE_CLICK_THRESHOLD)
                 {
                     // Double-click: expand card for inline editing
                     SwingUtilities.invokeLater(() -> card.expand());
                     lastClickTime = 0;
-                    lastClickAccount = null;
+                    lastClickAccountId = null;
                 }
                 else
                 {
                     // Single-click: select profile (only if card not expanded)
                     lastClickTime = now;
-                    lastClickAccount = profile;
+                    lastClickAccountId = profile.getId();
                     if (!card.isExpanded())
                     {
                         dragManager.getPlugin().selectAccount(profile);

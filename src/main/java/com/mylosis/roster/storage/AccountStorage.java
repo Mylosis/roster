@@ -12,13 +12,16 @@ import net.runelite.client.config.ConfigManager;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileReader;
-import java.io.FileWriter;
-import java.io.IOException;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -76,8 +79,8 @@ public class AccountStorage
     /**
      * Async writer for the on-disk JSON mirror. ConfigManager writes stay sync
      * (cheap in-process call into RuneLite's debouncer); the file write is the
-     * expensive part — {@link Files#copy} for the backup rotation plus a fresh
-     * {@link FileWriter} for the current file, on whichever thread called save().
+     * expensive part — {@link Files#copy} for the backup rotation plus a temp
+     * file + atomic move for the current file, on whichever thread called save().
      * Coalescing means a burst of saves (e.g. dragging that rewrites every
      * profile's sortOrder) only produces one disk write at the tail of the burst.
      */
@@ -88,8 +91,11 @@ public class AccountStorage
         return t;
     });
     private final AtomicReference<ScheduledFuture<?>> pendingFlush = new AtomicReference<>();
-    /** The data snapshot the next flush will serialize. Replaced on every save(). */
-    private volatile AccountData pendingFlushData;
+    /** The data snapshot the next flush will serialize. Replaced on every save().
+     *  AtomicReference (not volatile) so the consume side can claim it with a
+     *  single getAndSet — two racing consumers (timer flush vs sync flush on
+     *  shutdown) otherwise both see non-null and write the file concurrently. */
+    private final AtomicReference<AccountData> pendingFlushData = new AtomicReference<>();
 
     @Inject
     public AccountStorage(Gson gson, ConfigManager configManager)
@@ -207,7 +213,7 @@ public class AccountStorage
      */
     private AccountData loadFromFile(File file)
     {
-        try (FileReader reader = new FileReader(file))
+        try (BufferedReader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8))
         {
             AccountData data = gson.fromJson(reader, AccountData.class);
             if (data == null)
@@ -221,7 +227,28 @@ public class AccountStorage
         catch (Exception e)
         {
             log.error("Failed to read {}", file.getName(), e);
+            preserveCorruptFile(file);
             return null;
+        }
+    }
+
+    /**
+     * A file that exists but won't parse may still be the user's last good
+     * backup. Set it aside before the normal save path rotates it over
+     * {@code roster.backup.json} — without this, two saves after a bad load
+     * every recovery source is gone.
+     */
+    private void preserveCorruptFile(File file)
+    {
+        try
+        {
+            Path quarantine = file.toPath().resolveSibling(file.getName() + ".corrupt");
+            Files.copy(file.toPath(), quarantine, StandardCopyOption.REPLACE_EXISTING);
+            log.warn("Preserved unparseable {} as {}", file.getName(), quarantine.getFileName());
+        }
+        catch (Exception e)
+        {
+            log.warn("Could not preserve corrupt file {}", file.getName(), e);
         }
     }
 
@@ -272,7 +299,14 @@ public class AccountStorage
 
     private void scheduleDiskFlush(AccountData data)
     {
-        pendingFlushData = data;
+        pendingFlushData.set(data);
+        if (diskExecutor.isShutdown())
+        {
+            // Shouldn't happen now that shutdown() keeps the executor alive,
+            // but never let a save silently skip the disk mirror.
+            flushPending();
+            return;
+        }
         ScheduledFuture<?> previous = pendingFlush.getAndSet(
             diskExecutor.schedule(this::flushPending, DISK_WRITE_COALESCE_MS, TimeUnit.MILLISECONDS));
         if (previous != null)
@@ -283,14 +317,23 @@ public class AccountStorage
 
     private void flushPending()
     {
-        AccountData data = pendingFlushData;
+        AccountData data = pendingFlushData.getAndSet(null);
         if (data == null)
         {
             return;
         }
-        pendingFlushData = null;
         pendingFlush.set(null);
-        saveToFile(data);
+        try
+        {
+            saveToFile(data);
+        }
+        catch (Exception e)
+        {
+            // Runtime exceptions thrown inside a ScheduledFuture are swallowed
+            // by the executor unless someone calls get() — log them or the
+            // disk mirror fails invisibly. The next save() retries naturally.
+            log.error("Background roster.json flush failed", e);
+        }
     }
 
     /**
@@ -305,22 +348,24 @@ public class AccountStorage
         {
             current.cancel(false);
         }
-        AccountData data = pendingFlushData;
+        AccountData data = pendingFlushData.getAndSet(null);
         if (data != null)
         {
-            pendingFlushData = null;
             saveToFile(data);
         }
     }
 
     /**
-     * Stop the background writer. Called from {@code RosterPlugin.shutDown}
-     * after {@link #flushDiskWritesSync()} so any in-flight write completes first.
+     * Flush pending writes when the plugin is going down. Deliberately does
+     * NOT stop {@code diskExecutor}: this class is a Guice {@code @Singleton}
+     * and RuneLite re-enables plugins on the <i>same</i> instance, so a
+     * terminated executor would make every save after a plugin toggle throw
+     * {@link java.util.concurrent.RejectedExecutionException}. The writer is a
+     * named daemon thread — it never blocks client exit.
      */
     public void shutdown()
     {
         flushDiskWritesSync();
-        diskExecutor.shutdown();
     }
 
     private void saveToConfigManager(AccountData data)
@@ -344,12 +389,27 @@ public class AccountStorage
                 Files.copy(dataFile.toPath(), backupFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
             }
 
-            try (FileWriter writer = new FileWriter(dataFile))
+            // Serialize to a temp file, then atomically move it over the real
+            // one. A direct FileWriter(dataFile) truncates the previous good
+            // copy before writing, so any failure mid-serialization (including
+            // a concurrent mutation racing this background thread) would leave
+            // a torn roster.json behind.
+            Path target = dataFile.toPath();
+            Path tmp = target.resolveSibling(DATA_FILE_NAME + ".tmp");
+            try (Writer writer = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8))
             {
                 gson.toJson(data, writer);
             }
+            try
+            {
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            }
+            catch (AtomicMoveNotSupportedException e)
+            {
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+            }
         }
-        catch (IOException e)
+        catch (Exception e)
         {
             log.error("Failed to save backup file at {}", dataFile.getAbsolutePath(), e);
         }
@@ -376,22 +436,48 @@ public class AccountStorage
     public void saveAccount(Account profile)
     {
         AccountData data = load();
+        upsertAccount(data, profile);
+        save();
+        log.info("Saved account (total accounts: {})", data.getAccounts().size());
+    }
+
+    /**
+     * Updates several accounts with a single {@link #save()}. Drag-and-drop
+     * renumbers every account in the affected category; routing that through
+     * {@link #saveAccount} serialized the whole roster into ConfigManager once
+     * per account — O(n²) work on the EDT per drop.
+     */
+    public void saveAccounts(Collection<Account> profiles)
+    {
+        if (profiles.isEmpty())
+        {
+            return;
+        }
+        AccountData data = load();
+        for (Account profile : profiles)
+        {
+            upsertAccount(data, profile);
+        }
+        save();
+        log.info("Saved {} accounts in batch (total accounts: {})", profiles.size(), data.getAccounts().size());
+    }
+
+    private void upsertAccount(AccountData data, Account profile)
+    {
         Account existing = data.findAccountById(profile.getId());
         if (existing != null)
         {
             data.getAccounts().remove(existing);
-            log.debug("Updating existing account: {}", profile.getDisplayName());
+            log.debug("Updating existing account: {}", profile.getId());
         }
         else
         {
-            log.debug("Adding new account: {}", profile.getDisplayName());
+            log.debug("Adding new account: {}", profile.getId());
         }
         // Any save means the alias/username/notes may have changed; drop the
         // lazy search blob so the next filter pass rebuilds it.
         profile.invalidateSearchHaystack();
         data.addAccount(profile);
-        save();
-        log.info("Saved account (total accounts: {})", data.getAccounts().size());
     }
 
     public void deleteProfile(String id)
@@ -424,13 +510,36 @@ public class AccountStorage
     public void saveGroup(ProfileGroup group)
     {
         AccountData data = load();
+        upsertGroup(data, group);
+        save();
+    }
+
+    /**
+     * Updates several groups with a single {@link #save()} — same rationale as
+     * {@link #saveAccounts(Collection)}.
+     */
+    public void saveGroups(Collection<ProfileGroup> groups)
+    {
+        if (groups.isEmpty())
+        {
+            return;
+        }
+        AccountData data = load();
+        for (ProfileGroup group : groups)
+        {
+            upsertGroup(data, group);
+        }
+        save();
+    }
+
+    private void upsertGroup(AccountData data, ProfileGroup group)
+    {
         ProfileGroup existing = data.findGroupById(group.getId());
         if (existing != null)
         {
             data.getGroups().remove(existing);
         }
         data.addGroup(group);
-        save();
     }
 
     public void deleteGroup(String id)
@@ -481,7 +590,10 @@ public class AccountStorage
 
         if (replace)
         {
-            cachedData = importData;
+            // ensureSchema guards against imports with null collections (the
+            // validator tolerates them) and runs any pending migration —
+            // without it, deleteAllProfiles()/getAccountsInGroup() NPE later.
+            cachedData = ensureSchema(importData);
             stats = new ImportStats(
                 importData.getAccounts() != null ? importData.getAccounts().size() : 0,
                 0, 0,

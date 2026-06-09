@@ -64,32 +64,29 @@ public class AccountCardActions
     {
         var groups = plugin.getAccountStorage().getGroups();
 
-        String[] categoryNames = new String[groups.size() + 1];
-        String[] categoryIds = new String[groups.size() + 1];
-
-        categoryNames[0] = "Uncategorized";
-        categoryIds[0] = null;
-
+        // Wrapper objects (toString = name) instead of name strings: resolving
+        // the selection back via indexOf(name) sent the account to the FIRST
+        // category with that name whenever two categories shared a name.
+        GroupComboItem[] choices = new GroupComboItem[groups.size() + 1];
+        choices[0] = new GroupComboItem(null, "Uncategorized");
         for (int i = 0; i < groups.size(); i++)
         {
-            categoryNames[i + 1] = groups.get(i).getName();
-            categoryIds[i + 1] = groups.get(i).getId();
+            choices[i + 1] = new GroupComboItem(groups.get(i).getId(), groups.get(i).getName());
         }
 
-        String selected = (String) JOptionPane.showInputDialog(
+        GroupComboItem selected = (GroupComboItem) JOptionPane.showInputDialog(
             SwingUtilities.getWindowAncestor(plugin.getPanel()),
             "Select category:",
             "Move to Category",
             JOptionPane.PLAIN_MESSAGE,
             null,
-            categoryNames,
-            categoryNames[0]
+            choices,
+            choices[0]
         );
 
         if (selected != null)
         {
-            int index = java.util.Arrays.asList(categoryNames).indexOf(selected);
-            profile.setGroupId(categoryIds[index]);
+            profile.setGroupId(selected.id);
             plugin.getAccountStorage().saveAccount(profile);
             plugin.getPanel().rebuild();
         }

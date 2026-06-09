@@ -53,9 +53,38 @@ public final class AccountCardHelper
             display = (lastSpace > maxChars / 2) ? trimmed.substring(0, lastSpace) + "..." : trimmed + "...";
         }
         JLabel label = new JLabel(display);
+        // User-controlled text (alias/login/notes — importable from clipboard
+        // JSON) must never activate Swing's HTML renderer: a value starting
+        // with <html> would break rendering, and an embedded <img src> fires
+        // an outbound HTTP request when the label paints.
+        label.putClientProperty("html.disable", Boolean.TRUE);
         label.setForeground(color);
         label.setFont(font);
-        if (text != null && text.length() > maxChars) label.setToolTipText(text);
+        if (text != null && text.length() > maxChars) label.setToolTipText(safeTooltip(text));
+        return label;
+    }
+
+    /**
+     * Returns a tooltip-safe version of user-controlled text. Normal strings
+     * pass through untouched (identical rendering); strings Swing would treat
+     * as HTML are escaped so they display as literal text instead.
+     */
+    public static String safeTooltip(String text)
+    {
+        if (text == null || !javax.swing.plaf.basic.BasicHTML.isHTMLString(text))
+        {
+            return text;
+        }
+        return "<html>" + escapeHtml(text) + "</html>";
+    }
+
+    /**
+     * Disables HTML interpretation on a label that displays user-controlled
+     * text. Returns the label for chaining.
+     */
+    public static JLabel plainTextOnly(JLabel label)
+    {
+        label.putClientProperty("html.disable", Boolean.TRUE);
         return label;
     }
 
@@ -70,25 +99,24 @@ public final class AccountCardHelper
     }
 
     /**
-     * Forces revalidation up the entire component tree to the window ancestor.
+     * Revalidates and repaints the component's enclosing scroll pane — the
+     * layout boundary for anything inside the plugin's card list. This used to
+     * walk every ancestor up to (and including) the RuneLite window, repainting
+     * the whole client per call.
      */
     public static void revalidateToWindow(Component component)
     {
-        Container ancestor = component.getParent();
-        while (ancestor != null)
+        component.revalidate();
+        Container scrollPane = SwingUtilities.getAncestorOfClass(JScrollPane.class, component);
+        if (scrollPane != null)
         {
-            ancestor.revalidate();
-            ancestor.repaint();
-            ancestor = ancestor.getParent();
+            scrollPane.revalidate();
+            scrollPane.repaint();
         }
-        SwingUtilities.invokeLater(() -> {
-            Window window = SwingUtilities.getWindowAncestor(component);
-            if (window != null)
-            {
-                window.revalidate();
-                window.repaint();
-            }
-        });
+        else
+        {
+            component.repaint();
+        }
     }
 
     /**

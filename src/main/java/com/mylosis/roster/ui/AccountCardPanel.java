@@ -266,10 +266,17 @@ public class AccountCardPanel extends JPanel
             }
             meta.setAccountType(newType);
             plugin.getAccountStorage().saveAccount(profile);
-            // Pre-Phase-A this relied on the ConfigChanged echo from the data write
-            // to refresh the badge. That echo is now suppressed (it caused unrelated
-            // rebuilds across the app), so trigger one explicitly.
-            plugin.getPanel().rebuild();
+            // Only this card's badge changed — refresh it in place instead of
+            // tearing down the whole panel. (Grid view falls back to a full
+            // rebuild inside refreshDynamicState.)
+            if (parentPanel != null)
+            {
+                parentPanel.refreshAccount(profile.getId());
+            }
+            else
+            {
+                plugin.getPanel().rebuild();
+            }
         });
     }
 
@@ -320,8 +327,16 @@ public class AccountCardPanel extends JPanel
 
         Runnable onExpand = () -> { if (expansionHandler != null) expansionHandler.expand(); };
         AccountCardActions actions = new AccountCardActions(plugin, profile, onExpand);
-        JPopupMenu menu = actions.createContextMenu();
-        button.addActionListener(e -> menu.show(button, 0, button.getHeight()));
+        // Build the menu on first click — constructing it eagerly added six
+        // menu items + listeners per card per rebuild, for menus rarely opened.
+        JPopupMenu[] menuRef = new JPopupMenu[1];
+        button.addActionListener(e -> {
+            if (menuRef[0] == null)
+            {
+                menuRef[0] = actions.createContextMenu();
+            }
+            menuRef[0].show(button, 0, button.getHeight());
+        });
 
         button.addMouseListener(new MouseAdapter()
         {

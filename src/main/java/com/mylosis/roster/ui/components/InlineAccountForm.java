@@ -229,7 +229,9 @@ public class InlineAccountForm extends JPanel
         applyGroupId(profile);
         applyMetadata(profile);
 
-        log.debug("Inline form saving profile: {} (username: {})", profile.getDisplayName(), profile.getUsername());
+        // Log the id only — username is the login email, and debug logs end up
+        // in client.log files that users paste into bug reports.
+        log.debug("Inline form saving profile: {}", profile.getId());
 
         if (onSave != null)
         {
@@ -285,6 +287,12 @@ public class InlineAccountForm extends JPanel
             profile.setMetadata(meta);
         }
         meta.setNotes(notes.isEmpty() ? null : notes);
+        // Notes were mutated through the metadata object directly, which
+        // bypasses Account's invalidating setters — drop the cached search
+        // haystack or searching for the new notes text misses until the next
+        // unrelated mutation. (saveAccount also invalidates, but not every
+        // onSave consumer routes through it.)
+        profile.invalidateSearchHaystack();
         // Type only flows through the form for new accounts; existing accounts
         // change type via the card badge popover.
         if (typeCombo != null)

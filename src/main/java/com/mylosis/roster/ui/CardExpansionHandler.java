@@ -38,10 +38,24 @@ public class CardExpansionHandler
 
     public JPanel createFormPanel()
     {
+        // The edit form itself is built lazily in ensureEditForm(): every card
+        // gets a form panel on every rebuild, but the ~10 components of an
+        // InlineAccountForm are only needed when a card is actually expanded.
+        // Building them eagerly dominated rebuild cost (100 cards ≈ 1000+
+        // component constructions per rebuild) for forms nobody ever saw.
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBackground(Theme.FORM_BACKGROUND);
         panel.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, Theme.CARD_BORDER));
+        formPanel = panel;
+        return panel;
+    }
 
+    private void ensureEditForm()
+    {
+        if (editForm != null)
+        {
+            return;
+        }
         editForm = new InlineAccountForm(plugin, profile, true, null);
         editForm.setOnSave(savedAccount -> {
             plugin.getAccountStorage().saveAccount(savedAccount);
@@ -49,10 +63,7 @@ public class CardExpansionHandler
             plugin.getPanel().rebuild();
         });
         editForm.setOnCancel(this::collapse);
-
-        panel.add(editForm, BorderLayout.CENTER);
-        formPanel = panel;
-        return panel;
+        formPanel.add(editForm, BorderLayout.CENTER);
     }
 
     public boolean isExpanded()
@@ -75,6 +86,7 @@ public class CardExpansionHandler
             parentPanel.setExpandedCard((AccountCardPanel) ownerCard);
         }
         expanded = true;
+        ensureEditForm();
         formPanel.setVisible(true);
 
         // Calculate exact needed height: header + form + border
@@ -103,12 +115,20 @@ public class CardExpansionHandler
 
     private void revalidateAncestors()
     {
-        Container ancestor = ownerCard.getParent();
-        while (ancestor != null)
+        // Scope the revalidate/repaint to the enclosing scroll pane, the same
+        // boundary RosterPanel.rebuild() uses — the card only changes layout
+        // inside the viewport. Walking every ancestor to the window repainted
+        // the entire RuneLite client per expand/collapse.
+        ownerCard.revalidate();
+        Container scrollPane = SwingUtilities.getAncestorOfClass(JScrollPane.class, ownerCard);
+        if (scrollPane != null)
         {
-            ancestor.revalidate();
-            ancestor.repaint();
-            ancestor = ancestor.getParent();
+            scrollPane.revalidate();
+            scrollPane.repaint();
+        }
+        else
+        {
+            ownerCard.repaint();
         }
     }
 }

@@ -143,7 +143,9 @@ public class CategoryPanel extends JPanel
         chevron.setFont(Theme.fontRegular(chevron.getFont(), Theme.FONT_SIZE_TINY));
         leftPanel.add(chevron);
 
-        JLabel nameLabel = new JLabel(group.getName());
+        // Category names are user-controlled (and importable) — never let them
+        // activate the HTML renderer.
+        JLabel nameLabel = AccountCardHelper.plainTextOnly(new JLabel(group.getName()));
         nameLabel.setForeground(Theme.TEXT_PRIMARY);
         nameLabel.setFont(Theme.fontBold(nameLabel.getFont(), Theme.FONT_SIZE_BODY));
         leftPanel.add(nameLabel);
@@ -240,8 +242,16 @@ public class CategoryPanel extends JPanel
         button.setPreferredSize(new Dimension(24, Theme.BUTTON_HEIGHT_SM));
         button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
-        JPopupMenu menu = formHandler.createContextMenu();
-        button.addActionListener(e -> menu.show(button, 0, button.getHeight()));
+        // Built on first click — the category menu (incl. the color submenu's
+        // ten items) was constructed for every category on every rebuild.
+        JPopupMenu[] menuRef = new JPopupMenu[1];
+        button.addActionListener(e -> {
+            if (menuRef[0] == null)
+            {
+                menuRef[0] = formHandler.createContextMenu();
+            }
+            menuRef[0].show(button, 0, button.getHeight());
+        });
         button.addMouseListener(new MouseAdapter()
         {
             @Override

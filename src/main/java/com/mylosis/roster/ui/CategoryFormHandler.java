@@ -42,6 +42,10 @@ public class CategoryFormHandler
     public void toggleAddForm(boolean isCollapsed, Component parent)
     {
         addFormVisible = !addFormVisible;
+        if (addFormVisible)
+        {
+            ensureAddForm();
+        }
         addFormPanel.setVisible(addFormVisible);
 
         if (addFormVisible)
@@ -115,8 +119,9 @@ public class CategoryFormHandler
 
     private JMenuItem createColorSwatch(Color color, String name)
     {
-        // Create a small colored icon for the menu item
-        ImageIcon icon = new ImageIcon(new java.awt.image.BufferedImage(12, 12, java.awt.image.BufferedImage.TYPE_INT_ARGB))
+        // Plain Icon — the previous ImageIcon allocated a 12×12 backing image
+        // its overridden paintIcon never used.
+        Icon icon = new Icon()
         {
             @Override
             public void paintIcon(Component c, Graphics g, int x, int y)
@@ -145,6 +150,10 @@ public class CategoryFormHandler
 
     private JPanel buildFormPanel()
     {
+        // Container only — the InlineAccountForm inside is built lazily by
+        // ensureAddForm() on first show. Every category constructed one of
+        // these forms (~10 components) on every rebuild for a panel that
+        // stays hidden until the user clicks "+".
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBackground(Theme.FORM_BACKGROUND);
         panel.setBorder(BorderFactory.createCompoundBorder(
@@ -153,7 +162,15 @@ public class CategoryFormHandler
         ));
         panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 180));
         panel.setVisible(false);
+        return panel;
+    }
 
+    private void ensureAddForm()
+    {
+        if (addForm != null)
+        {
+            return;
+        }
         addForm = new InlineAccountForm(plugin, null, false, group.getId());
         addForm.setOnSave(profile -> {
             plugin.getAccountStorage().saveAccount(profile);
@@ -167,9 +184,7 @@ public class CategoryFormHandler
             addFormPanel.setVisible(false);
             addFormVisible = false;
         });
-
-        panel.add(addForm, BorderLayout.CENTER);
-        return panel;
+        addFormPanel.add(addForm, BorderLayout.CENTER);
     }
 
     private void renameCategory()

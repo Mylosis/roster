@@ -62,7 +62,7 @@ public class DropExecutor
             notifyIfSortOverridden();
             SwingUtilities.invokeLater(() -> panel.rebuild());
             log.debug("Reordered account {} to position {} in category {}",
-                draggedAccount.getDisplayName(), insertIndex, currentGroupId);
+                draggedAccount.getId(), insertIndex, currentGroupId);
         }
     }
 
@@ -113,10 +113,11 @@ public class DropExecutor
 
         for (int i = 0; i < groups.size(); i++)
         {
-            ProfileGroup g = groups.get(i);
-            g.setSortOrder(i);
-            plugin.getAccountStorage().saveGroup(g);
+            groups.get(i).setSortOrder(i);
         }
+        // One batched save — per-group saveGroup() serialized the whole roster
+        // into ConfigManager once per category, on the EDT.
+        plugin.getAccountStorage().saveGroups(groups);
 
         SwingUtilities.invokeLater(() -> panel.rebuild());
         log.debug("Reordered category {} to position {}", draggedCategory.getName(), insertIndex);
@@ -129,18 +130,15 @@ public class DropExecutor
         {
             profile.getMetadata().setSortOrder(insertIndex);
         }
-        plugin.getAccountStorage().saveAccount(profile);
-        updateProfileSortOrders(newGroupId, profile.getId(), insertIndex);
-        SwingUtilities.invokeLater(() -> panel.rebuild());
-        log.debug("Moved account {} to category {} at position {}",
-            profile.getDisplayName(), newGroupId, insertIndex);
-    }
 
-    private void updateProfileSortOrders(String groupId, String insertedProfileId, int insertIndex)
-    {
-        List<Account> categoryProfiles = getAccountsInCategory(groupId, insertedProfileId);
+        // Batch the moved account and every renumbered sibling into one save —
+        // per-account saveAccount() serialized the whole roster into
+        // ConfigManager once per account, making a drop O(n²) on the EDT.
+        List<Account> changed = new ArrayList<>();
+        changed.add(profile);
+
+        List<Account> categoryProfiles = getAccountsInCategory(newGroupId, profile.getId());
         categoryProfiles.sort(AccountData.SORT_ORDER_COMPARATOR);
-
         for (int i = 0; i < categoryProfiles.size(); i++)
         {
             Account p = categoryProfiles.get(i);
@@ -148,9 +146,14 @@ public class DropExecutor
             if (p.getMetadata() != null)
             {
                 p.getMetadata().setSortOrder(newOrder);
-                plugin.getAccountStorage().saveAccount(p);
+                changed.add(p);
             }
         }
+        plugin.getAccountStorage().saveAccounts(changed);
+
+        SwingUtilities.invokeLater(() -> panel.rebuild());
+        log.debug("Moved account {} to category {} at position {}",
+            profile.getId(), newGroupId, insertIndex);
     }
 
     private void reorderProfileInCategory(String groupId, Account profile, int newIndex)
@@ -162,15 +165,17 @@ public class DropExecutor
         newIndex = Math.max(0, Math.min(newIndex, categoryProfiles.size()));
         categoryProfiles.add(newIndex, profile);
 
+        List<Account> changed = new ArrayList<>();
         for (int i = 0; i < categoryProfiles.size(); i++)
         {
             Account p = categoryProfiles.get(i);
             if (p.getMetadata() != null)
             {
                 p.getMetadata().setSortOrder(i);
-                plugin.getAccountStorage().saveAccount(p);
+                changed.add(p);
             }
         }
+        plugin.getAccountStorage().saveAccounts(changed);
     }
 
     private List<Account> getAccountsInCategory(String groupId, String excludeProfileId)

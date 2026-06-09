@@ -160,10 +160,13 @@ public final class Theme
         if (base == null) return null;
         // Pack base identity hash + style + size into a single long key. Base
         // identity (rather than equals) is intentional — distinct Font instances
-        // can derive differently even when superficially equal.
+        // can derive differently even when superficially equal. Size is stored
+        // in quarter-points: raw float bits put the distinguishing bits of
+        // small integral sizes in the HIGH bits, so masking them with 0xFFFF
+        // would collapse every size into one cache entry.
         long key = ((long) System.identityHashCode(base) << 32)
             | ((long) (style & 0xFFFF) << 16)
-            | (Float.floatToRawIntBits(size) & 0xFFFFL);
+            | ((long) (size * 4f) & 0xFFFFL);
         Font cached = FONT_CACHE.get(key);
         if (cached != null) return cached;
         Font derived = base.deriveFont(style, size);

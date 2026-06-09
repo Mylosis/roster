@@ -41,10 +41,10 @@ public class GridAccountBuilder
         nameRow.setOpaque(false);
         nameRow.setAlignmentX(Component.CENTER_ALIGNMENT);
 
-        JLabel nameLabel = new JLabel(truncate(displayName, 12));
+        JLabel nameLabel = AccountCardHelper.plainTextOnly(new JLabel(truncate(displayName, 12)));
         nameLabel.setForeground(Theme.TEXT_PRIMARY);
         nameLabel.setFont(Theme.fontBold(card.getFont(), Theme.FONT_SIZE_BODY));
-        if (displayName.length() > 12) nameLabel.setToolTipText(displayName);
+        if (displayName.length() > 12) nameLabel.setToolTipText(AccountCardHelper.safeTooltip(displayName));
         nameRow.add(nameLabel);
         nameRow.add(createGridBadge(plugin, profile));
         inner.add(nameRow);
@@ -53,12 +53,12 @@ public class GridAccountBuilder
         if (subtitle != null)
         {
             inner.add(Box.createVerticalStrut(1));
-            JLabel subLabel = new JLabel(truncate(subtitle, 14));
+            JLabel subLabel = AccountCardHelper.plainTextOnly(new JLabel(truncate(subtitle, 14)));
             subLabel.setForeground(Theme.TEXT_SECONDARY);
             subLabel.setFont(Theme.fontRegular(card.getFont(), Theme.FONT_SIZE_SMALL));
             subLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
             subLabel.setHorizontalAlignment(SwingConstants.CENTER);
-            if (subtitle.length() > 14) subLabel.setToolTipText(subtitle);
+            if (subtitle.length() > 14) subLabel.setToolTipText(AccountCardHelper.safeTooltip(subtitle));
             inner.add(subLabel);
         }
 
@@ -78,8 +78,15 @@ public class GridAccountBuilder
         menuBtn.setToolTipText("More options");
 
         AccountCardActions actions = new AccountCardActions(plugin, profile, onEdit);
-        JPopupMenu menu = actions.createContextMenu();
-        menuBtn.addActionListener(e -> menu.show(menuBtn, 0, menuBtn.getHeight()));
+        // Lazily built on first click — see AccountCardPanel.createMenuButton.
+        JPopupMenu[] menuRef = new JPopupMenu[1];
+        menuBtn.addActionListener(e -> {
+            if (menuRef[0] == null)
+            {
+                menuRef[0] = actions.createContextMenu();
+            }
+            menuRef[0].show(menuBtn, 0, menuBtn.getHeight());
+        });
         menuBtn.addMouseListener(new MouseAdapter()
         {
             @Override

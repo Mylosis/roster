@@ -143,6 +143,17 @@ public class ExpandingMenuButton extends JPanel
         Toolkit.getDefaultToolkit().removeAWTEventListener(outsideClickListener);
     }
 
+    @Override
+    public void removeNotify()
+    {
+        // If the plugin shuts down (or the panel rebuilds) while the popup is
+        // open, tear it down here — otherwise the Toolkit-level AWT listener
+        // and the JWindow outlive the component for the rest of the JVM,
+        // inspecting every mouse event client-wide.
+        hideMenu();
+        super.removeNotify();
+    }
+
     /**
      * Individual menu item with hover effect
      */
