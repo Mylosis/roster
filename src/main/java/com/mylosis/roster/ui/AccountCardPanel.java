@@ -176,7 +176,13 @@ public class AccountCardPanel extends JPanel
         // Display name — determine what to show based on privacy settings
         String displayName = AccountCardHelper.resolveDisplayName(profile, config);
         String loggedIn = plugin.getLoggedInDisplayName();
-        boolean isOnline = loggedIn != null && displayName != null && loggedIn.equalsIgnoreCase(profile.getDisplayName());
+        // Prefer the learned in-game character name; the display name (alias or
+        // login email) only matches by coincidence when the alias equals the
+        // character name.
+        String matchName = profile.getCharacterName() != null
+            ? profile.getCharacterName()
+            : profile.getDisplayName();
+        boolean isOnline = loggedIn != null && loggedIn.equalsIgnoreCase(matchName);
 
         // Always render in a row so we can fit the type badge alongside the name.
         JPanel nameRow = new JPanel(new FlowLayout(FlowLayout.LEFT, Theme.SPACING_SM, 0));

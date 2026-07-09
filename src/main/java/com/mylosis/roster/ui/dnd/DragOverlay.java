@@ -213,10 +213,12 @@ public class DragOverlay extends JComponent
                 int lineX = x + 20;
                 int lineWidth = width - 40;
 
-                // Calculate approximate Y position for insert indicator
-                // This is an approximation - the actual card positions would need to be passed
-                int insertY = y + 45 + (target.insertIndex * 75); // header height + card heights
-                insertY = Math.min(insertY, y + height - 5);
+                // Exact position measured from real card bounds by DropTargetFinder;
+                // the geometric estimate remains only as the empty-category fallback.
+                int insertY = target.insertLineY >= 0
+                    ? target.insertLineY - parentScreen.y
+                    : y + 45 + (target.insertIndex * 75);
+                insertY = Math.max(y + 5, Math.min(insertY, y + height - 5));
 
                 g2d.drawLine(lineX, insertY, lineX + lineWidth, insertY);
 

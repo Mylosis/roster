@@ -7,6 +7,8 @@ import com.mylosis.roster.ui.RosterPanel;
 import lombok.extern.slf4j.Slf4j;
 
 import java.awt.*;
+import java.awt.event.AWTEventListener;
+import java.awt.event.KeyEvent;
 
 /**
  * Manages drag and drop for profiles and categories.
@@ -30,6 +32,24 @@ public class DragDropManager
     private Point currentDragPoint = null;
     private DropTarget currentDropTarget = null;
 
+    /**
+     * ESC aborts an in-flight drag. A Toolkit-level listener (registered only for
+     * the drag's duration, same pattern as ExpandingMenuButton's dismissal) rather
+     * than a Swing key binding: during a drag, focus may sit on the game's
+     * heavyweight Canvas, where WHEN_IN_FOCUSED_WINDOW bindings never fire.
+     */
+    private final AWTEventListener escapeListener = event -> {
+        if (isDragging && event instanceof KeyEvent)
+        {
+            KeyEvent ke = (KeyEvent) event;
+            if (ke.getID() == KeyEvent.KEY_PRESSED && ke.getKeyCode() == KeyEvent.VK_ESCAPE)
+            {
+                ke.consume();
+                cancelDrag();
+            }
+        }
+    };
+
     public enum DragType
     {
         PROFILE,
@@ -44,6 +64,10 @@ public class DragDropManager
         public final String groupId;
         public final Rectangle bounds;
         public final int insertIndex;
+        /** Exact screen-Y of the insert indicator line, measured from the real
+         *  card bounds in the drag snapshot. -1 when unknown (empty category),
+         *  in which case the overlay falls back to its geometric estimate. */
+        public final int insertLineY;
 
         public DropTarget(Type type, String groupId, Rectangle bounds)
         {
@@ -52,10 +76,16 @@ public class DragDropManager
 
         public DropTarget(Type type, String groupId, Rectangle bounds, int insertIndex)
         {
+            this(type, groupId, bounds, insertIndex, -1);
+        }
+
+        public DropTarget(Type type, String groupId, Rectangle bounds, int insertIndex, int insertLineY)
+        {
             this.type = type;
             this.groupId = groupId;
             this.bounds = bounds;
             this.insertIndex = insertIndex;
+            this.insertLineY = insertLineY;
         }
     }
 
@@ -92,6 +122,7 @@ public class DragDropManager
         overlay.setDragImage(source);
         overlay.setMouseLocation(screenPoint);
         overlay.setVisible(true);
+        Toolkit.getDefaultToolkit().addAWTEventListener(escapeListener, AWTEvent.KEY_EVENT_MASK);
         log.debug("Started dragging account: {}", profile.getId());
     }
 
@@ -108,6 +139,7 @@ public class DragDropManager
         overlay.setDragImage(source);
         overlay.setMouseLocation(screenPoint);
         overlay.setVisible(true);
+        Toolkit.getDefaultToolkit().addAWTEventListener(escapeListener, AWTEvent.KEY_EVENT_MASK);
         log.debug("Started dragging category: {}", category.getName());
     }
 
@@ -186,6 +218,9 @@ public class DragDropManager
 
     private void resetDragState()
     {
+        // Removing a listener that was never added is a documented no-op, so
+        // this is safe on every reset path (drop, cancel, ESC).
+        Toolkit.getDefaultToolkit().removeAWTEventListener(escapeListener);
         isDragging = false;
         dragType = null;
         draggedAccount = null;

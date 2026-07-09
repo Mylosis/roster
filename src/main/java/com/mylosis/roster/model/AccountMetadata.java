@@ -18,7 +18,8 @@ public class AccountMetadata
     /**
      * Epoch millis of the last time this account was detected logged in on the current client.
      * Nullable for accounts that have never been seen online (or pre-v1.1 data). Updated by
-     * {@code RosterPlugin.onGameStateChanged} with a 60s throttle to avoid save thrash.
+     * {@code RosterPlugin.onGameStateChanged}, throttled per account by
+     * {@code RosterPlugin.LAST_ONLINE_THROTTLE_MS} (10 minutes) to avoid save thrash.
      */
     private Long lastOnlineAt;
 

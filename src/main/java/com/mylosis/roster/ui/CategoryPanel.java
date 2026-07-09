@@ -15,7 +15,6 @@ import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -34,15 +33,14 @@ public class CategoryPanel extends JPanel
     private final RosterPanel ownerPanel;
 
     private final JPanel contentWrapper;
-    private final JLabel chevronLabel;
+    /** The header's collapse chevron, assigned in {@link #createHeader()} and
+     *  updated by {@link #updateCollapsedState()}. Single source of truth (a
+     *  previous revision kept a second, never-displayed label in sync). */
+    private JLabel chevronLabel;
+    /** Header component, exposed via {@link #getHeaderHeight()} so the drag
+     *  target finder can use the real header bounds instead of assuming 45px. */
+    private JPanel headerPanel;
     private boolean collapsed;
-
-    public CategoryPanel(RosterPlugin plugin, ProfileGroup group, List<Account> profiles, DragDropManager dragDropManager)
-    {
-        // Legacy two-arg-ish path: best-effort lookup. Safe to call only after
-        // RosterPanel construction has completed.
-        this(plugin, group, profiles, dragDropManager, Collections.emptyMap(), plugin.getPanel());
-    }
 
     /**
      * @param groupsById pre-resolved group lookup shared by all cards built in this
@@ -115,16 +113,22 @@ public class CategoryPanel extends JPanel
 
         add(contentWrapper, BorderLayout.CENTER);
 
-        chevronLabel = new JLabel(collapsed ? "\u25B6" : "\u25BC");
-        chevronLabel.setForeground(Theme.TEXT_SECONDARY);
-        chevronLabel.setFont(Theme.fontRegular(chevronLabel.getFont(), Theme.FONT_SIZE_TINY));
-
         updateCollapsedState();
+    }
+
+    /**
+     * Height of the category header row, or 0 if not yet laid out. Used by
+     * {@code DropTargetFinder} to size the category-reorder hit zone.
+     */
+    public int getHeaderHeight()
+    {
+        return headerPanel != null ? headerPanel.getHeight() : 0;
     }
 
     private JPanel createHeader()
     {
         JPanel headerPanel = new JPanel(new BorderLayout(Theme.SPACING_MD, 0));
+        this.headerPanel = headerPanel;
         headerPanel.setBackground(Theme.GROUP_HEADER);
         headerPanel.setBorder(BorderFactory.createCompoundBorder(
             BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.CARD_BORDER),
@@ -138,10 +142,10 @@ public class CategoryPanel extends JPanel
         // Chevron colored by category color when enabled
         Color catColor = Theme.parseColor(group.getColor());
 
-        JLabel chevron = new JLabel(collapsed ? "\u25B6" : "\u25BC");
-        chevron.setForeground(catColor != null ? catColor : Theme.TEXT_SECONDARY);
-        chevron.setFont(Theme.fontRegular(chevron.getFont(), Theme.FONT_SIZE_TINY));
-        leftPanel.add(chevron);
+        chevronLabel = new JLabel(collapsed ? "\u25B6" : "\u25BC");
+        chevronLabel.setForeground(catColor != null ? catColor : Theme.TEXT_SECONDARY);
+        chevronLabel.setFont(Theme.fontRegular(chevronLabel.getFont(), Theme.FONT_SIZE_TINY));
+        leftPanel.add(chevronLabel);
 
         // Category names are user-controlled (and importable) — never let them
         // activate the HTML renderer.
@@ -185,12 +189,8 @@ public class CategoryPanel extends JPanel
                     int dy = Math.abs(e.getPoint().y - pressPoint.y);
                     if (duration < 300 && dx < 5 && dy < 5 && e.getButton() == MouseEvent.BUTTON1)
                     {
+                        // updateCollapsedState() flips the chevron too.
                         toggleCollapsed();
-                        Component[] components = leftPanel.getComponents();
-                        if (components.length > 0 && components[0] instanceof JLabel)
-                        {
-                            ((JLabel) components[0]).setText(collapsed ? "\u25B6" : "\u25BC");
-                        }
                     }
                 }
                 pressPoint = null;

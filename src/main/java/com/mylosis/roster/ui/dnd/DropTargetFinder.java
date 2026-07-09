@@ -26,7 +26,7 @@ public class DropTargetFinder
     // for a panel with ~50 components that's ~3000 traversals per second of dragging.
     private List<CategoryPanel> snapshotCategoryPanels;
     private JPanel snapshotUncategorizedHeader;
-    // Cards per category, walked once at drag start. calculateInsertIndex runs
+    // Cards per category, walked once at drag start. calculateInsertPoint runs
     // on every mouse-moved event while hovering a category; without this it
     // re-walked the category's whole component subtree each event.
     private java.util.Map<CategoryPanel, List<AccountCardPanel>> snapshotCardsByCategory;
@@ -102,9 +102,10 @@ public class DropTargetFinder
             try
             {
                 Point panelLocation = categoryPanel.getLocationOnScreen();
+                int headerHeight = categoryPanel.getHeaderHeight();
                 Rectangle headerBounds = new Rectangle(
                     panelLocation.x, panelLocation.y,
-                    categoryPanel.getWidth(), 45
+                    categoryPanel.getWidth(), headerHeight > 0 ? headerHeight : 45
                 );
 
                 if (headerBounds.contains(screenPoint))
@@ -147,10 +148,10 @@ public class DropTargetFinder
                 if (panelBounds.contains(screenPoint))
                 {
                     String groupId = categoryPanel.getGroup().getId();
-                    int insertIndex = calculateInsertIndex(categoryPanel, screenPoint);
+                    InsertPoint insert = calculateInsertPoint(categoryPanel, screenPoint);
                     return new DragDropManager.DropTarget(
                         DragDropManager.DropTarget.Type.CATEGORY_DROP,
-                        groupId, panelBounds, insertIndex
+                        groupId, panelBounds, insert.index, insert.lineY
                     );
                 }
             }
@@ -196,9 +197,26 @@ public class DropTargetFinder
     }
 
     /**
-     * Calculate insert index based on mouse position relative to profile cards.
+     * Insert position within a category: the index the dragged card would land
+     * at, plus the exact screen-Y where the insert line should be drawn. The
+     * line Y comes from the real card bounds; the overlay used to estimate it
+     * from an assumed 75px card height, which drifted whenever cards varied
+     * (notes line, last-online line, grid mode).
      */
-    int calculateInsertIndex(CategoryPanel categoryPanel, Point screenPoint)
+    static final class InsertPoint
+    {
+        final int index;
+        /** Screen Y for the indicator line; -1 when unknown (empty category). */
+        final int lineY;
+
+        InsertPoint(int index, int lineY)
+        {
+            this.index = index;
+            this.lineY = lineY;
+        }
+    }
+
+    InsertPoint calculateInsertPoint(CategoryPanel categoryPanel, Point screenPoint)
     {
         List<AccountCardPanel> cards = snapshotCardsByCategory != null
             ? snapshotCardsByCategory.get(categoryPanel)
@@ -209,8 +227,9 @@ public class DropTargetFinder
             findProfileCards(categoryPanel, cards);
         }
 
-        if (cards.isEmpty()) return 0;
+        if (cards.isEmpty()) return new InsertPoint(0, -1);
 
+        int lastVisibleBottom = -1;
         for (int i = 0; i < cards.size(); i++)
         {
             AccountCardPanel card = cards.get(i);
@@ -220,14 +239,18 @@ public class DropTargetFinder
             {
                 Point cardLocation = card.getLocationOnScreen();
                 int cardMidY = cardLocation.y + card.getHeight() / 2;
-                if (screenPoint.y < cardMidY) return i;
+                if (screenPoint.y < cardMidY)
+                {
+                    return new InsertPoint(i, cardLocation.y);
+                }
+                lastVisibleBottom = cardLocation.y + card.getHeight();
             }
             catch (Exception e)
             {
                 // Component might not be showing
             }
         }
-        return cards.size();
+        return new InsertPoint(cards.size(), lastVisibleBottom);
     }
 
     private void findProfileCards(Container container, List<AccountCardPanel> result)

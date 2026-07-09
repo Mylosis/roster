@@ -215,8 +215,9 @@ public class ImportExportService
      * Foreign JSON can carry {@code metadata: null} or an unrecognized
      * {@code accountType} (Gson maps unknown enum constants to null). Backfill
      * defaults so downstream UI code never NPEs on imported accounts.
+     * Static (stateless) so tests can exercise it without a ConfigManager.
      */
-    private void normalizeImportData(AccountData data)
+    static void normalizeImportData(AccountData data)
     {
         if (data.getAccounts() == null)
         {
@@ -235,7 +236,9 @@ public class ImportExportService
         }
     }
 
-    private String validateImportData(AccountData data)
+    /** Returns a user-facing error, or null if the data is importable.
+     *  Static (stateless) so tests can exercise it without a ConfigManager. */
+    static String validateImportData(AccountData data)
     {
         if (data.getVersion() > AccountData.CURRENT_VERSION)
         {

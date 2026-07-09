@@ -80,6 +80,15 @@ public class RosterPlugin extends Plugin
     @Getter
     private volatile String selectedAccountId;
 
+    /**
+     * One-shot link between a login-screen card selection and the next completed
+     * login. Set by {@link #selectAccount}, consumed (and cleared) by the first
+     * LOGGED_IN that follows, so a later, unrelated manual login can never be
+     * mis-attributed to a stale selection. Lets us learn the account's real
+     * character name even when it matches neither alias nor login email.
+     */
+    private volatile String pendingLinkAccountId;
+
     @Override
     protected void startUp() throws Exception
     {
@@ -159,12 +168,17 @@ public class RosterPlugin extends Plugin
                     return false;
                 }
                 String previousOnline = loggedInDisplayName;
-                loggedInDisplayName = client.getLocalPlayer().getName();
-                log.debug("Detected logged-in player: {}", loggedInDisplayName);
-                stampLastOnline(loggedInDisplayName);
-                String nowOnlineId = findAccountIdByDisplayName(loggedInDisplayName);
-                String prevOnlineId = previousOnline != null ? findAccountIdByDisplayName(previousOnline) : null;
+                String characterName = client.getLocalPlayer().getName();
+                loggedInDisplayName = characterName;
+                log.debug("Detected logged-in player: {}", characterName);
+                // AccountStorage is EDT-confined: every other reader/writer is
+                // Swing UI code. Doing the stamp here on the client thread (as
+                // this used to) raced UI-driven saves on the shared AccountData.
                 SwingUtilities.invokeLater(() -> {
+                    String nowOnlineId = stampLastOnline(characterName);
+                    String prevOnlineId = previousOnline != null && !previousOnline.equalsIgnoreCase(characterName)
+                        ? findAccountIdByName(previousOnline)
+                        : null;
                     if (panel == null) return;
                     // Refresh just the cards whose visible state can have changed —
                     // the now-online card, and the previously-online card if any.
@@ -186,8 +200,8 @@ public class RosterPlugin extends Plugin
         {
             String previousOnline = loggedInDisplayName;
             loggedInDisplayName = null;
-            String prevOnlineId = previousOnline != null ? findAccountIdByDisplayName(previousOnline) : null;
             SwingUtilities.invokeLater(() -> {
+                String prevOnlineId = findAccountIdByName(previousOnline);
                 if (panel != null && prevOnlineId != null)
                 {
                     panel.refreshAccount(prevOnlineId);
@@ -197,22 +211,33 @@ public class RosterPlugin extends Plugin
     }
 
     /**
-     * Returns the id of the account whose display name matches {@code name}
-     * (case-insensitive), or null if no roster entry corresponds. Used to scope
-     * incremental UI refreshes to just the affected card.
+     * Returns the roster account matching an in-game character name: an exact
+     * {@code characterName} match wins, else the first display-name match
+     * (alias if set, otherwise login name). Case-insensitive. EDT only.
      */
-    private String findAccountIdByDisplayName(String name)
+    private Account findAccountByCharacterOrDisplayName(String name)
     {
         if (name == null || accountStorage == null) return null;
+        Account displayMatch = null;
         for (Account a : accountStorage.getAccounts())
         {
-            String n = a.getDisplayName();
-            if (n != null && name.equalsIgnoreCase(n))
+            if (name.equalsIgnoreCase(a.getCharacterName()))
             {
-                return a.getId();
+                return a;
+            }
+            if (displayMatch == null && name.equalsIgnoreCase(a.getDisplayName()))
+            {
+                displayMatch = a;
             }
         }
-        return null;
+        return displayMatch;
+    }
+
+    /** Id-returning convenience over {@link #findAccountByCharacterOrDisplayName}. */
+    private String findAccountIdByName(String name)
+    {
+        Account a = findAccountByCharacterOrDisplayName(name);
+        return a != null ? a.getId() : null;
     }
 
     @Subscribe
@@ -261,6 +286,9 @@ public class RosterPlugin extends Plugin
             // the panel is unchanged, so a full rebuild here would be wasteful.
             String previousId = selectedAccountId;
             selectedAccountId = profile.getId();
+            // Arm the one-shot selection-to-login link so the next completed login
+            // can learn this account's character name (see stampLastOnline).
+            pendingLinkAccountId = profile.getId();
 
             log.debug("Selected account: {}", profile.getId());
 
@@ -283,51 +311,73 @@ public class RosterPlugin extends Plugin
     }
 
     /**
-     * Stamps {@code lastOnlineAt} on the account whose display name matches the freshly
-     * detected character name. Throttled per-account: at 10 minutes, world hops within a
-     * play session collapse to a single write, and a normal play session ends up writing
-     * the timestamp only a handful of times rather than once a minute. The "last online"
-     * label on the card has minute-granularity copy anyway ("logged in 5m ago"), so this
-     * is invisible to users. Matching is case-insensitive against the account's display
-     * name (alias if set, otherwise login name).
+     * lastOnlineAt write throttle, per account. At 10 minutes, world hops within a
+     * play session collapse to a single write, and a normal play session ends up
+     * writing the timestamp only a handful of times rather than once a minute. The
+     * "last online" label on the card has minute-granularity copy anyway ("logged
+     * in 5m ago"), so this is invisible to users.
      */
-    private static final long LAST_ONLINE_THROTTLE_MS = 10L * 60_000L;
+    static final long LAST_ONLINE_THROTTLE_MS = 10L * 60_000L;
 
-    private void stampLastOnline(String displayName)
+    /**
+     * Records that {@code characterName} was just seen logged in: stamps
+     * {@code lastOnlineAt} (throttled) and learns/refreshes the account's
+     * {@code characterName}. The account is resolved by character name, then
+     * display name, then the one-shot selection link armed by
+     * {@link #selectAccount}, which is consumed here unconditionally so it can
+     * never mis-attribute a later, unrelated login. EDT only.
+     *
+     * @return the matched account's id (for a scoped card refresh), or null if
+     *         this character isn't in the roster.
+     */
+    private String stampLastOnline(String characterName)
     {
-        if (displayName == null || accountStorage == null)
+        if (characterName == null || accountStorage == null)
         {
-            return;
+            return null;
         }
-        Account matched = null;
-        for (Account a : accountStorage.getAccounts())
+        Account matched = findAccountByCharacterOrDisplayName(characterName);
+        String pendingLink = pendingLinkAccountId;
+        pendingLinkAccountId = null;
+        if (matched == null && pendingLink != null)
         {
-            String name = a.getDisplayName();
-            if (name != null && displayName.equalsIgnoreCase(name))
+            matched = accountStorage.getProfile(pendingLink);
+            if (matched != null)
             {
-                matched = a;
-                break;
+                log.debug("Linked login '{}' to selected account {}", characterName, matched.getId());
             }
         }
         if (matched == null)
         {
-            return;
+            return null;
+        }
+
+        boolean dirty = false;
+        if (!characterName.equalsIgnoreCase(matched.getCharacterName()))
+        {
+            matched.setCharacterName(characterName);
+            dirty = true;
         }
         AccountMetadata meta = matched.getMetadata();
         if (meta == null)
         {
             meta = AccountMetadata.createDefault();
             matched.setMetadata(meta);
+            dirty = true;
         }
         long now = System.currentTimeMillis();
         Long previous = meta.getLastOnlineAt();
-        if (previous != null && (now - previous) < LAST_ONLINE_THROTTLE_MS)
+        if (previous == null || (now - previous) >= LAST_ONLINE_THROTTLE_MS)
         {
-            return;
+            meta.setLastOnlineAt(now);
+            dirty = true;
         }
-        meta.setLastOnlineAt(now);
-        accountStorage.saveAccount(matched);
-        log.debug("Stamped lastOnlineAt for {}", matched.getId());
+        if (dirty)
+        {
+            accountStorage.saveAccount(matched);
+            log.debug("Stamped lastOnlineAt for {}", matched.getId());
+        }
+        return matched.getId();
     }
 
     @Provides

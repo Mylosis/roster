@@ -29,6 +29,7 @@ public class SearchBar extends JPanel
     private final JPanel clearButton;
     private Consumer<String> onSearchChanged;
     private boolean isFocused = false;
+    private boolean clearHovered = false;
     private String placeholderText = "";
 
     /**
@@ -159,6 +160,15 @@ public class SearchBar extends JPanel
 
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+                // Non-opaque component: Swing skips the automatic background
+                // fill, so setBackground() from the hover listener never showed.
+                // Paint the hover state ourselves.
+                if (clearHovered)
+                {
+                    g2.setColor(Theme.BACKGROUND_HOVER);
+                    g2.fillRoundRect(0, 0, getWidth(), getHeight(), 6, 6);
+                }
                 g2.setColor(Theme.TEXT_MUTED);
 
                 // Draw refresh/circular arrow icon
@@ -194,13 +204,15 @@ public class SearchBar extends JPanel
             @Override
             public void mouseEntered(MouseEvent e)
             {
-                clearButton.setBackground(Theme.BACKGROUND_HOVER);
+                clearHovered = true;
+                clearButton.repaint();
             }
 
             @Override
             public void mouseExited(MouseEvent e)
             {
-                clearButton.setBackground(null);
+                clearHovered = false;
+                clearButton.repaint();
             }
         });
         add(clearButton, BorderLayout.EAST);

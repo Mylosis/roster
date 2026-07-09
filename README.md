@@ -42,6 +42,7 @@ A RuneLite plugin for managing multiple OSRS accounts. Organize your mains, alts
 - **Import from Clipboard**: Paste JSON account data
 - **Export to Clipboard**: Copy all accounts as JSON
 - Per-account export available via the three-dot menu on each account
+- Note: exports contain your login emails/usernames in plain text, so only paste or share them somewhere you trust
 
 ## Configuration
 

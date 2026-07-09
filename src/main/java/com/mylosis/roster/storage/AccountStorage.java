@@ -4,6 +4,8 @@ import com.google.gson.Gson;
 import com.mylosis.roster.model.ImportDuplicateMode;
 import com.mylosis.roster.model.Account;
 import com.mylosis.roster.model.AccountData;
+import com.mylosis.roster.model.AccountMetadata;
+import com.mylosis.roster.model.AccountType;
 import com.mylosis.roster.model.ProfileGroup;
 
 import lombok.extern.slf4j.Slf4j;
@@ -23,7 +25,6 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -83,23 +84,28 @@ public class AccountStorage
      * file + atomic move for the current file, on whichever thread called save().
      * Coalescing means a burst of saves (e.g. dragging that rewrites every
      * profile's sortOrder) only produces one disk write at the tail of the burst.
+     *
+     * <p>The executor is RuneLite's shared scheduled executor (injected), not a
+     * plugin-owned thread: one less thing for Plugin Hub review to question,
+     * and nothing to tear down on shutDown.
      */
     private static final long DISK_WRITE_COALESCE_MS = 250;
-    private final ScheduledExecutorService diskExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread t = new Thread(r, "roster-disk-writer");
-        t.setDaemon(true);
-        return t;
-    });
+    private final ScheduledExecutorService diskExecutor;
     private final AtomicReference<ScheduledFuture<?>> pendingFlush = new AtomicReference<>();
-    /** The data snapshot the next flush will serialize. Replaced on every save().
-     *  AtomicReference (not volatile) so the consume side can claim it with a
-     *  single getAndSet — two racing consumers (timer flush vs sync flush on
-     *  shutdown) otherwise both see non-null and write the file concurrently. */
-    private final AtomicReference<AccountData> pendingFlushData = new AtomicReference<>();
+    /** The JSON the next flush will write, serialized eagerly on the thread that
+     *  called save(). Serializing a snapshot string up front (a few ms even at
+     *  hundreds of accounts) means the background writer never walks the live
+     *  object graph while the EDT keeps mutating it (previously a window for
+     *  ConcurrentModificationException inside Gson). AtomicReference (not
+     *  volatile) so the consume side can claim it with a single getAndSet:
+     *  two racing consumers (timer flush vs sync flush on shutdown) otherwise
+     *  both see non-null and write the file concurrently. */
+    private final AtomicReference<String> pendingFlushJson = new AtomicReference<>();
 
     @Inject
-    public AccountStorage(Gson gson, ConfigManager configManager)
+    public AccountStorage(Gson gson, ConfigManager configManager, ScheduledExecutorService executor)
     {
+        this.diskExecutor = executor;
         // Storage Gson is compact — roster.json is internal, never read by humans.
         // Pretty-printing roughly doubles file size and serialization cost, which
         // adds up because every account/group write rewrites the whole blob.
@@ -266,6 +272,20 @@ public class AccountStorage
         {
             data.setGroups(new ArrayList<>());
         }
+        // Legacy accounts can carry null metadata, which silently exempts them
+        // from drag renumbering (DropExecutor skips accounts it can't stamp a
+        // sortOrder on). Backfill a minimal default, deliberately without
+        // createdAt, preserving the "unknown age sorts oldest" semantics.
+        for (Account account : data.getAccounts())
+        {
+            if (account.getMetadata() == null)
+            {
+                account.setMetadata(AccountMetadata.builder()
+                    .accountType(AccountType.MAIN)
+                    .sortOrder(0)
+                    .build());
+            }
+        }
         int oldVersion = data.getVersion();
         if (oldVersion < AccountData.CURRENT_VERSION)
         {
@@ -299,14 +319,9 @@ public class AccountStorage
 
     private void scheduleDiskFlush(AccountData data)
     {
-        pendingFlushData.set(data);
-        if (diskExecutor.isShutdown())
-        {
-            // Shouldn't happen now that shutdown() keeps the executor alive,
-            // but never let a save silently skip the disk mirror.
-            flushPending();
-            return;
-        }
+        // Serialize here, on the mutating thread, so the snapshot is internally
+        // consistent no matter when the background write actually runs.
+        pendingFlushJson.set(gson.toJson(data));
         ScheduledFuture<?> previous = pendingFlush.getAndSet(
             diskExecutor.schedule(this::flushPending, DISK_WRITE_COALESCE_MS, TimeUnit.MILLISECONDS));
         if (previous != null)
@@ -317,15 +332,15 @@ public class AccountStorage
 
     private void flushPending()
     {
-        AccountData data = pendingFlushData.getAndSet(null);
-        if (data == null)
+        String json = pendingFlushJson.getAndSet(null);
+        if (json == null)
         {
             return;
         }
         pendingFlush.set(null);
         try
         {
-            saveToFile(data);
+            saveToFile(json);
         }
         catch (Exception e)
         {
@@ -348,20 +363,19 @@ public class AccountStorage
         {
             current.cancel(false);
         }
-        AccountData data = pendingFlushData.getAndSet(null);
-        if (data != null)
+        String json = pendingFlushJson.getAndSet(null);
+        if (json != null)
         {
-            saveToFile(data);
+            saveToFile(json);
         }
     }
 
     /**
-     * Flush pending writes when the plugin is going down. Deliberately does
-     * NOT stop {@code diskExecutor}: this class is a Guice {@code @Singleton}
-     * and RuneLite re-enables plugins on the <i>same</i> instance, so a
-     * terminated executor would make every save after a plugin toggle throw
-     * {@link java.util.concurrent.RejectedExecutionException}. The writer is a
-     * named daemon thread — it never blocks client exit.
+     * Flush pending writes when the plugin is going down. The executor is
+     * RuneLite's shared scheduler, never ours to stop. This class is a Guice
+     * {@code @Singleton} and RuneLite re-enables plugins on the <i>same</i>
+     * instance, so keeping the executor untouched also means saves keep working
+     * after a plugin toggle.
      */
     public void shutdown()
     {
@@ -380,7 +394,7 @@ public class AccountStorage
         }
     }
 
-    private void saveToFile(AccountData data)
+    private void saveToFile(String json)
     {
         try
         {
@@ -389,16 +403,15 @@ public class AccountStorage
                 Files.copy(dataFile.toPath(), backupFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
             }
 
-            // Serialize to a temp file, then atomically move it over the real
-            // one. A direct FileWriter(dataFile) truncates the previous good
-            // copy before writing, so any failure mid-serialization (including
-            // a concurrent mutation racing this background thread) would leave
-            // a torn roster.json behind.
+            // Write to a temp file, then atomically move it over the real one.
+            // A direct FileWriter(dataFile) truncates the previous good copy
+            // before writing, so any failure mid-write would leave a torn
+            // roster.json behind.
             Path target = dataFile.toPath();
             Path tmp = target.resolveSibling(DATA_FILE_NAME + ".tmp");
             try (Writer writer = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8))
             {
-                gson.toJson(data, writer);
+                writer.write(json);
             }
             try
             {
