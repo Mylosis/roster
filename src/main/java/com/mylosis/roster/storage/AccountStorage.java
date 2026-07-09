@@ -156,7 +156,7 @@ public class AccountStorage
             log.info("Re-seeding ConfigManager with {} accounts from file backup ({})",
                 cachedData.getAccounts() != null ? cachedData.getAccounts().size() : 0,
                 "primary/backup");
-            saveToConfigManager(cachedData);
+            saveToConfigManager(gson.toJson(cachedData));
             // Do NOT rename the source file — keeping it around means a future
             // ConfigManager loss can be recovered from the same place, instead
             // of orphaning the only on-disk copy. The next save() will refresh
@@ -199,13 +199,29 @@ public class AccountStorage
 
     /**
      * Pulls the primary copy from ConfigManager. Returns null if absent or unreadable.
+     *
+     * <p>Stored as an explicit JSON string. The typed
+     * {@code getConfiguration(group, key, AccountData.class)} overload only works
+     * for types annotated with RuneLite's {@code @ConfigSerializer}; for anything
+     * else {@code stringToObject} returns the raw String, which made the old typed
+     * read throw ClassCastException on every launch — and the matching write path
+     * ({@code objectToString}) stored Lombok's toString(), not JSON. The net effect
+     * was that this layer never round-tripped and every load silently fell back to
+     * roster.json, which also means cloud sync could not work on a machine without
+     * the file. Reading the raw string and parsing it ourselves fixes both ends;
+     * legacy toString() values fail to parse and fall through to the file recovery
+     * cascade, after which the next save writes proper JSON.
      */
     private AccountData loadFromConfigManager()
     {
         try
         {
-            AccountData data = configManager.getConfiguration(CONFIG_GROUP, CONFIG_KEY_DATA, AccountData.class);
-            return data;
+            String json = configManager.getConfiguration(CONFIG_GROUP, CONFIG_KEY_DATA);
+            if (json == null || json.trim().isEmpty())
+            {
+                return null;
+            }
+            return gson.fromJson(json, AccountData.class);
         }
         catch (Exception e)
         {
@@ -309,19 +325,21 @@ public class AccountStorage
         sortedGroupsCache = null;
         cachedData.invalidateIndexes();
 
-        // ConfigManager handles its own debouncing internally, so we hit it
-        // directly — it's also our primary persistence layer.
-        saveToConfigManager(cachedData);
+        // One serialization feeds both layers: ConfigManager gets the JSON
+        // string directly (see loadFromConfigManager for why it must be a
+        // string), and the disk mirror writes the same snapshot later.
+        // Serializing here, on the mutating thread, also keeps the snapshot
+        // internally consistent no matter when the background write runs.
+        String json = gson.toJson(cachedData);
+        saveToConfigManager(json);
         // Schedule the file mirror on a background thread; coalesce a burst of
         // saves (drag reorders write per-profile in a tight loop) into one write.
-        scheduleDiskFlush(cachedData);
+        scheduleDiskFlush(json);
     }
 
-    private void scheduleDiskFlush(AccountData data)
+    private void scheduleDiskFlush(String json)
     {
-        // Serialize here, on the mutating thread, so the snapshot is internally
-        // consistent no matter when the background write actually runs.
-        pendingFlushJson.set(gson.toJson(data));
+        pendingFlushJson.set(json);
         ScheduledFuture<?> previous = pendingFlush.getAndSet(
             diskExecutor.schedule(this::flushPending, DISK_WRITE_COALESCE_MS, TimeUnit.MILLISECONDS));
         if (previous != null)
@@ -382,11 +400,11 @@ public class AccountStorage
         flushDiskWritesSync();
     }
 
-    private void saveToConfigManager(AccountData data)
+    private void saveToConfigManager(String json)
     {
         try
         {
-            configManager.setConfiguration(CONFIG_GROUP, CONFIG_KEY_DATA, data);
+            configManager.setConfiguration(CONFIG_GROUP, CONFIG_KEY_DATA, json);
         }
         catch (Exception e)
         {
