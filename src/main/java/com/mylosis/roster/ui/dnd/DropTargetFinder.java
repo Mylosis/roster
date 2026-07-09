@@ -26,6 +26,8 @@ public class DropTargetFinder
     // for a panel with ~50 components that's ~3000 traversals per second of dragging.
     private List<CategoryPanel> snapshotCategoryPanels;
     private JPanel snapshotUncategorizedHeader;
+    private JPanel snapshotUncategorizedContainer;
+    private List<AccountCardPanel> snapshotUncategorizedCards;
     // Cards per category, walked once at drag start. calculateInsertPoint runs
     // on every mouse-moved event while hovering a category; without this it
     // re-walked the category's whole component subtree each event.
@@ -47,7 +49,13 @@ public class DropTargetFinder
     public void primeSnapshot()
     {
         snapshotCategoryPanels = findCategoryPanels();
-        snapshotUncategorizedHeader = findUncategorizedHeader();
+        snapshotUncategorizedHeader = findPanelWithProperty("UNCATEGORIZED_HEADER");
+        snapshotUncategorizedContainer = findPanelWithProperty("UNCATEGORIZED_CONTAINER");
+        snapshotUncategorizedCards = new ArrayList<>();
+        if (snapshotUncategorizedContainer != null)
+        {
+            findProfileCards(snapshotUncategorizedContainer, snapshotUncategorizedCards);
+        }
         snapshotCardsByCategory = new java.util.HashMap<>();
         for (CategoryPanel categoryPanel : snapshotCategoryPanels)
         {
@@ -64,6 +72,8 @@ public class DropTargetFinder
     {
         snapshotCategoryPanels = null;
         snapshotUncategorizedHeader = null;
+        snapshotUncategorizedContainer = null;
+        snapshotUncategorizedCards = null;
         snapshotCardsByCategory = null;
     }
 
@@ -77,7 +87,7 @@ public class DropTargetFinder
         {
             return target;
         }
-        return checkUncategorizedHeader(screenPoint, draggedAccount);
+        return checkUncategorizedArea(screenPoint);
     }
 
     /**
@@ -163,37 +173,67 @@ public class DropTargetFinder
         return null;
     }
 
-    private DragDropManager.DropTarget checkUncategorizedHeader(Point screenPoint, Account draggedAccount)
+    /**
+     * Hit-tests the whole uncategorized region: the "Uncategorized" header (when
+     * groups exist) plus the ungrouped card list below it. Previously only the
+     * header was a target, so drops "into Uncategorized" felt broken next to
+     * real categories (whose entire panel accepts drops), and reordering within
+     * Uncategorized was impossible. Insert position comes from the real card
+     * bounds, exactly like {@link #calculateInsertPoint}.
+     */
+    private DragDropManager.DropTarget checkUncategorizedArea(Point screenPoint)
     {
         JPanel header = snapshotUncategorizedHeader != null
             ? snapshotUncategorizedHeader
-            : findUncategorizedHeader();
-        if (header == null || !header.isShowing()) return null;
+            : findPanelWithProperty("UNCATEGORIZED_HEADER");
+        JPanel container = snapshotUncategorizedContainer != null
+            ? snapshotUncategorizedContainer
+            : findPanelWithProperty("UNCATEGORIZED_CONTAINER");
 
+        Rectangle area = null;
+        area = unionShowingBounds(area, header);
+        area = unionShowingBounds(area, container);
+        if (area == null || !area.contains(screenPoint))
+        {
+            return null;
+        }
+
+        List<AccountCardPanel> cards = snapshotUncategorizedCards;
+        if (cards == null)
+        {
+            cards = new ArrayList<>();
+            if (container != null)
+            {
+                findProfileCards(container, cards);
+            }
+        }
+        InsertPoint insert = insertPointFromCards(cards, screenPoint);
+        return new DragDropManager.DropTarget(
+            DragDropManager.DropTarget.Type.UNCATEGORIZED, null, area,
+            insert.index, insert.lineY
+        );
+    }
+
+    /** Extends {@code area} to cover {@code panel}'s on-screen bounds; returns
+     *  the (possibly new) rectangle, or {@code area} unchanged if the panel is
+     *  null or not showing. */
+    private static Rectangle unionShowingBounds(Rectangle area, JPanel panel)
+    {
+        if (panel == null || !panel.isShowing())
+        {
+            return area;
+        }
         try
         {
-            Point headerLocation = header.getLocationOnScreen();
-            Rectangle headerBounds = new Rectangle(
-                headerLocation.x, headerLocation.y,
-                header.getWidth(), header.getHeight()
-            );
-
-            if (headerBounds.contains(screenPoint))
-            {
-                if (draggedAccount != null && draggedAccount.getGroupId() == null)
-                {
-                    return null;
-                }
-                return new DragDropManager.DropTarget(
-                    DragDropManager.DropTarget.Type.UNCATEGORIZED, null, headerBounds
-                );
-            }
+            Point location = panel.getLocationOnScreen();
+            Rectangle bounds = new Rectangle(location.x, location.y, panel.getWidth(), panel.getHeight());
+            return area == null ? bounds : area.union(bounds);
         }
         catch (Exception e)
         {
             // Component might not be showing
+            return area;
         }
-        return null;
     }
 
     /**
@@ -226,8 +266,12 @@ public class DropTargetFinder
             cards = new ArrayList<>();
             findProfileCards(categoryPanel, cards);
         }
+        return insertPointFromCards(cards, screenPoint);
+    }
 
-        if (cards.isEmpty()) return new InsertPoint(0, -1);
+    static InsertPoint insertPointFromCards(List<AccountCardPanel> cards, Point screenPoint)
+    {
+        if (cards == null || cards.isEmpty()) return new InsertPoint(0, -1);
 
         int lastVisibleBottom = -1;
         for (int i = 0; i < cards.size(); i++)
@@ -293,36 +337,41 @@ public class DropTargetFinder
         }
     }
 
-    private JPanel findUncategorizedHeader()
+    /** Finds the first JPanel in the tree tagged with the given client property
+     *  set to {@code Boolean.TRUE} (e.g. "UNCATEGORIZED_HEADER" or
+     *  "UNCATEGORIZED_CONTAINER", tagged by AccountListBuilder). */
+    private JPanel findPanelWithProperty(String propertyKey)
     {
         List<JPanel> result = new ArrayList<>();
-        findUncategorizedHeaderRecursive(panel, result);
+        findPanelWithPropertyRecursive(panel, propertyKey, result);
         return result.isEmpty() ? null : result.get(0);
     }
 
-    private void findUncategorizedHeaderRecursive(Container container, List<JPanel> result)
+    private void findPanelWithPropertyRecursive(Container container, String propertyKey, List<JPanel> result)
     {
+        if (!result.isEmpty()) return;
+
         if (container instanceof JScrollPane)
         {
             JScrollPane scrollPane = (JScrollPane) container;
             Component view = scrollPane.getViewport().getView();
-            if (view instanceof JPanel && Boolean.TRUE.equals(((JPanel) view).getClientProperty("UNCATEGORIZED_HEADER")))
+            if (view instanceof JPanel && Boolean.TRUE.equals(((JPanel) view).getClientProperty(propertyKey)))
             {
                 result.add((JPanel) view);
                 return;
             }
-            if (view instanceof Container) findUncategorizedHeaderRecursive((Container) view, result);
+            if (view instanceof Container) findPanelWithPropertyRecursive((Container) view, propertyKey, result);
             return;
         }
 
         for (Component comp : container.getComponents())
         {
-            if (comp instanceof JPanel && Boolean.TRUE.equals(((JPanel) comp).getClientProperty("UNCATEGORIZED_HEADER")))
+            if (comp instanceof JPanel && Boolean.TRUE.equals(((JPanel) comp).getClientProperty(propertyKey)))
             {
                 result.add((JPanel) comp);
                 return;
             }
-            if (comp instanceof Container) findUncategorizedHeaderRecursive((Container) comp, result);
+            if (comp instanceof Container) findPanelWithPropertyRecursive((Container) comp, propertyKey, result);
         }
     }
 }

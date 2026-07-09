@@ -165,6 +165,10 @@ public class AccountListBuilder
                 JPanel wrapper = new JPanel(new BorderLayout());
                 wrapper.setBackground(Theme.BACKGROUND);
                 wrapper.add(gridPanel, BorderLayout.NORTH);
+                // Marks the ungrouped card area as a drop zone: DropTargetFinder
+                // hit-tests this container so drops land anywhere in the list,
+                // not just on the header (which doesn't even exist without groups).
+                wrapper.putClientProperty("UNCATEGORIZED_CONTAINER", Boolean.TRUE);
                 target.add(wrapper);
             }
             else
@@ -172,6 +176,8 @@ public class AccountListBuilder
                 JPanel ungroupedPanel = new JPanel();
                 ungroupedPanel.setLayout(new BoxLayout(ungroupedPanel, BoxLayout.Y_AXIS));
                 ungroupedPanel.setBackground(Theme.BACKGROUND);
+                // Same drop-zone marker as the grid wrapper above.
+                ungroupedPanel.putClientProperty("UNCATEGORIZED_CONTAINER", Boolean.TRUE);
                 for (Account profile : ungrouped)
                 {
                     AccountCardPanel card = new AccountCardPanel(plugin, profile, parentPanel, groupsById);

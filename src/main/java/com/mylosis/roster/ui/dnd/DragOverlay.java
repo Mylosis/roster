@@ -203,7 +203,9 @@ public class DragOverlay extends JComponent
                     3
                 );
             }
-            else if (target.type == DragDropManager.DropTarget.Type.CATEGORY_DROP && target.insertIndex >= 0)
+            else if ((target.type == DragDropManager.DropTarget.Type.CATEGORY_DROP
+                || target.type == DragDropManager.DropTarget.Type.UNCATEGORIZED)
+                && target.insertIndex >= 0)
             {
                 // Draw insert position indicator for profile drops
                 g2d.setStroke(STROKE_INSERT_LINE);
