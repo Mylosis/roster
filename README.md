@@ -93,6 +93,14 @@ BSD 2-Clause License
 
 ## Changelog
 
+### v1.1.3
+- **Fix: cloud sync actually syncs now.** RuneLite's ConfigManager only serializes types that carry its `@ConfigSerializer` annotation; Roster's account data was being stored as a plain `toString()` and came back as an unreadable raw string, so every launch quietly fell back to the local `roster.json` and data never reached a second machine. Account data is now stored as explicit JSON. Existing installs self-heal automatically on the first launch after updating (the local file re-seeds the synced copy).
+- **Fix: dropping into Uncategorized.** The entire uncategorized area (header plus card list) is now a drop target, drops land exactly where the indicator shows, and accounts can be reordered within Uncategorized. Previously only the header registered drops and the card could land at an unpredictable position.
+- **Drag-and-drop polish:** the insert indicator now sits exactly on card boundaries instead of being estimated from a fixed card height, the category reorder hit zone matches the real header, and ESC cancels an in-flight drag.
+- **Online detection survives alias renames.** Roster learns each account's in-game character name (on first sighting, or by selecting the card on the login screen before logging in) and uses it for the online dot, last-online stamping, and search.
+- **Stability:** storage access is now confined to one thread and disk writes snapshot the data up front, closing rare races between drags, login events, and the background file mirror.
+- Internal: performance sweep across the UI layer (no visible changes) and 34 new unit tests covering import/merge, drag renumbering, and search.
+
 ### v1.1.2
 - **Fix: mouse-wheel scroll on the panel.** RuneLite's `PluginPanel` default constructor wraps your content in its own `JScrollPane`. Combined with the panel's inner scroll pane this produced a dead scroll wheel everywhere except the narrow scrollbar strip itself — the inner viewport sized to the full content height and never needed to scroll, so wheel events landed on it as no-ops. Now passes `false` to `super()` so we own the scrolling end-to-end. Bonus: the search/+Account/+Category header and the footer (account count, mode buttons) now stay pinned while only the card list scrolls.
 - Plugin-hub preview GIF added to the README.
