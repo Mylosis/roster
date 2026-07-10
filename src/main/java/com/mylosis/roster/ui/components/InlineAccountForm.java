@@ -211,7 +211,9 @@ public class InlineAccountForm extends JPanel
             @Override public void keyPressed(KeyEvent e) {
                 if (e.getKeyCode() == KeyEvent.VK_ENTER && !e.isControlDown()) {
                     e.consume();
-                    KeyboardFocusManager.getCurrentKeyboardFocusManager().focusNextComponent();
+                    // Component-local focus hop; the global focus-manager API is
+                    // disallowed on the Plugin Hub (flagged in PR #13538).
+                    e.getComponent().transferFocus();
                 }
             }
         };
