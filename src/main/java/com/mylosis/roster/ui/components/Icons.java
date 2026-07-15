@@ -1,8 +1,5 @@
 package com.mylosis.roster.ui.components;
 
-import lombok.extern.slf4j.Slf4j;
-import net.runelite.client.util.ImageUtil;
-
 import javax.swing.ImageIcon;
 import java.awt.Color;
 import java.awt.Graphics2D;
@@ -12,14 +9,13 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Icon registry for the plugin. Provides access to icon resources with caching.
+ * Icon registry for the plugin. Icons are drawn programmatically rather than
+ * loaded from image resources, so they scale to any requested size. Results are cached.
  */
-@Slf4j
 public final class Icons
 {
     private Icons() {} // Prevent instantiation
 
-    private static final String ICON_PATH = "/com/mylosis/roster/";
     private static final Map<String, ImageIcon> iconCache = new HashMap<>();
 
     // Icon names
@@ -42,7 +38,7 @@ public final class Icons
     public static final String LIST = "list";
 
     /**
-     * Gets an icon by name. Returns a fallback if the icon is not found.
+     * Gets an icon by name. Unknown names get a generic placeholder.
      */
     public static ImageIcon get(String name)
     {
@@ -60,34 +56,15 @@ public final class Icons
             return iconCache.get(cacheKey);
         }
 
-        ImageIcon icon = loadIcon(name, size);
+        ImageIcon icon = new ImageIcon(drawIcon(name, size));
         iconCache.put(cacheKey, icon);
         return icon;
     }
 
-    private static ImageIcon loadIcon(String name, int size)
-    {
-        try
-        {
-            BufferedImage img = ImageUtil.loadImageResource(Icons.class, ICON_PATH + name + ".png");
-            if (img.getWidth() != size || img.getHeight() != size)
-            {
-                img = ImageUtil.resizeImage(img, size, size);
-            }
-            return new ImageIcon(img);
-        }
-        catch (Exception e)
-        {
-            log.debug("Icon not found: {}, using fallback", name);
-            return new ImageIcon(createFallbackIcon(name, size));
-        }
-    }
-
     /**
-     * Creates a simple fallback icon when the actual icon is not found.
-     * Delegates to specific draw methods per icon type.
+     * Draws an icon at the requested size, delegating to a draw method per icon type.
      */
-    private static BufferedImage createFallbackIcon(String name, int size)
+    private static BufferedImage drawIcon(String name, int size)
     {
         BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
