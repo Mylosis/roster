@@ -1,9 +1,9 @@
 package com.mylosis.roster.ui;
 
 import com.mylosis.roster.model.SortKey;
+import com.mylosis.roster.ui.components.Controls;
 import com.mylosis.roster.ui.components.SearchBar;
 import com.mylosis.roster.ui.components.Theme;
-import lombok.Getter;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -12,26 +12,21 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
- * Builds the header section of the Roster panel.
- * Contains title, version badge, search bar, and action buttons
- * (+ Account, + Category, and the v1.1 sort selector).
+ * Builds the header of the Roster panel: title and version, search bar, and
+ * the + Account, + Category, and sort buttons.
  */
-public class PanelHeaderBuilder
+final class PanelHeaderBuilder
 {
-    @Getter
-    private SearchBar searchBar;
+    private PanelHeaderBuilder() {}
 
     /**
-     * Create the full header panel.
-     *
-     * @param onSearchChanged callback fired when the user types in the search bar
-     * @param onAddAccount    callback for the "+ Account" button
-     * @param onAddCategory   callback for the "+ Category" button
-     * @param currentSortKey  supplier for the live SortKey (read each time the menu opens
-     *                        so the check mark reflects the active value)
-     * @param onSortChanged   callback when the user picks a new SortKey
+     * @param onSearchChanged fired with the lowercase filter after the user pauses typing
+     * @param onAddAccount    the "+ Account" button action
+     * @param onAddCategory   the "+ Category" button action
+     * @param currentSortKey  read each time the sort menu opens, so its check mark is current
+     * @param onSortChanged   fired when the user picks a sort key
      */
-    public JPanel build(Consumer<String> onSearchChanged,
+    static JPanel build(Consumer<String> onSearchChanged,
                         Runnable onAddAccount,
                         Runnable onAddCategory,
                         Supplier<SortKey> currentSortKey,
@@ -44,17 +39,13 @@ public class PanelHeaderBuilder
 
         header.add(createTitleRow());
         header.add(Box.createVerticalStrut(Theme.SPACING_MD));
-
-        searchBar = createSearchBar(onSearchChanged);
-        header.add(searchBar);
+        header.add(createSearchBar(onSearchChanged));
         header.add(Box.createVerticalStrut(Theme.SPACING_MD));
-
         header.add(createActionButtonsRow(onAddAccount, onAddCategory, currentSortKey, onSortChanged));
-
         return header;
     }
 
-    private JPanel createTitleRow()
+    private static JPanel createTitleRow()
     {
         JPanel titleRow = new JPanel(new BorderLayout());
         titleRow.setBackground(Theme.BACKGROUND);
@@ -74,19 +65,19 @@ public class PanelHeaderBuilder
         return titleRow;
     }
 
-    private SearchBar createSearchBar(Consumer<String> onSearchChanged)
+    private static SearchBar createSearchBar(Consumer<String> onSearchChanged)
     {
         SearchBar bar = new SearchBar();
         bar.setPlaceholder("Filter...");
         bar.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
         bar.setAlignmentX(Component.LEFT_ALIGNMENT);
-        bar.setOnSearchChanged(onSearchChanged::accept);
+        bar.setOnSearchChanged(onSearchChanged);
         return bar;
     }
 
-    private JPanel createActionButtonsRow(Runnable onAddAccount, Runnable onAddCategory,
-                                          Supplier<SortKey> currentSortKey,
-                                          Consumer<SortKey> onSortChanged)
+    private static JPanel createActionButtonsRow(Runnable onAddAccount, Runnable onAddCategory,
+                                                 Supplier<SortKey> currentSortKey,
+                                                 Consumer<SortKey> onSortChanged)
     {
         JPanel buttonRow = new JPanel(new GridBagLayout());
         buttonRow.setBackground(Theme.BACKGROUND);
@@ -100,103 +91,54 @@ public class PanelHeaderBuilder
         gbc.gridx = 0;
         gbc.weightx = 0.55;
         gbc.insets = new Insets(0, 0, 0, Theme.SPACING_XS);
-        buttonRow.add(createActionButton("+ Account", "Add a new account", onAddAccount), gbc);
+        buttonRow.add(headerButton("+ Account", "Add a new account", false, onAddAccount), gbc);
 
         gbc.gridx = 1;
         gbc.weightx = 0.30;
-        gbc.insets = new Insets(0, 0, 0, Theme.SPACING_XS);
-        buttonRow.add(createActionButton("+ Category", "Add category", onAddCategory), gbc);
+        buttonRow.add(headerButton("+ Category", "Add category", false, onAddCategory), gbc);
 
         gbc.gridx = 2;
         gbc.weightx = 0.15;
         gbc.insets = new Insets(0, 0, 0, 0);
-        buttonRow.add(createSortButton(currentSortKey, onSortChanged), gbc);
+        JButton sortButton = headerButton("\u21F5", "Sort accounts", true, null);
+        sortButton.addActionListener(e -> showSortMenu(sortButton, currentSortKey.get(), onSortChanged));
+        buttonRow.add(sortButton, gbc);
 
         return buttonRow;
     }
 
-    private JButton createActionButton(String text, String tooltip, Runnable onClick)
+    private static JButton headerButton(String text, String tooltip, boolean bold, Runnable onClick)
     {
-        JButton button = new JButton(text);
-        button.setBackground(Theme.BUTTON_SECONDARY);
-        button.setForeground(Theme.TEXT_PRIMARY);
-        button.setFocusPainted(false);
-        button.setBorderPainted(false);
-        button.setFont(Theme.fontRegular(button.getFont(), Theme.FONT_SIZE_BODY));
-        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        JButton button = Controls.flatButton(text, Theme.BUTTON_SECONDARY, Theme.BUTTON_SECONDARY_HOVER);
+        button.setFont(bold
+            ? Theme.fontBold(button.getFont(), Theme.FONT_SIZE_BODY)
+            : Theme.fontRegular(button.getFont(), Theme.FONT_SIZE_BODY));
         button.setToolTipText(tooltip);
-        button.addActionListener(e -> onClick.run());
-        button.addMouseListener(new java.awt.event.MouseAdapter()
+        if (onClick != null)
         {
-            @Override
-            public void mouseEntered(java.awt.event.MouseEvent e)
-            {
-                button.setBackground(Theme.BUTTON_SECONDARY_HOVER);
-            }
-
-            @Override
-            public void mouseExited(java.awt.event.MouseEvent e)
-            {
-                button.setBackground(Theme.BUTTON_SECONDARY);
-            }
-        });
+            button.addActionListener(e -> onClick.run());
+        }
         return button;
     }
 
-    /**
-     * Compact icon button that opens a popup menu listing every {@link SortKey},
-     * with the currently-active key checkmarked. Picking an option fires the
-     * supplied {@code onSortChanged} callback (which writes config + rebuilds).
-     */
-    private JButton createSortButton(Supplier<SortKey> currentSortKey,
-                                     Consumer<SortKey> onSortChanged)
+    /** Lists every {@link SortKey}, with the active one checked and highlighted. */
+    private static void showSortMenu(JButton anchor, SortKey active, Consumer<SortKey> onSortChanged)
     {
-        JButton button = new JButton("⇵"); // ⇅
-        button.setBackground(Theme.BUTTON_SECONDARY);
-        button.setForeground(Theme.TEXT_PRIMARY);
-        button.setFocusPainted(false);
-        button.setBorderPainted(false);
-        button.setFont(Theme.fontBold(button.getFont(), Theme.FONT_SIZE_BODY));
-        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        button.setToolTipText("Sort accounts");
-        button.addActionListener(e -> showSortMenu(button, currentSortKey, onSortChanged));
-        button.addMouseListener(new java.awt.event.MouseAdapter()
-        {
-            @Override
-            public void mouseEntered(java.awt.event.MouseEvent e) { button.setBackground(Theme.BUTTON_SECONDARY_HOVER); }
-
-            @Override
-            public void mouseExited(java.awt.event.MouseEvent e) { button.setBackground(Theme.BUTTON_SECONDARY); }
-        });
-        return button;
-    }
-
-    private void showSortMenu(JButton anchor, Supplier<SortKey> currentSortKey,
-                              Consumer<SortKey> onSortChanged)
-    {
-        SortKey active = currentSortKey.get();
         JPopupMenu menu = new JPopupMenu();
         menu.setBackground(Theme.BACKGROUND_DARKER);
         menu.setBorder(BorderFactory.createLineBorder(Theme.CARD_BORDER, 1));
 
         for (SortKey key : SortKey.values())
         {
-            JMenuItem item = new JMenuItem(key.getLabel());
+            boolean isActive = key == active;
+            // A leading check glyph marks the active item as a state, not a button.
+            JMenuItem item = new JMenuItem((isActive ? "\u2713 " : "    ") + key.getLabel());
             item.setBackground(Theme.BACKGROUND_DARKER);
-            item.setForeground(key == active ? Theme.ACCENT_ORANGE : Theme.TEXT_PRIMARY);
-            item.setFont(key == active
+            item.setForeground(isActive ? Theme.ACCENT_ORANGE : Theme.TEXT_PRIMARY);
+            item.setFont(isActive
                 ? Theme.fontBold(item.getFont(), Theme.FONT_SIZE_SMALL)
                 : Theme.fontRegular(item.getFont(), Theme.FONT_SIZE_SMALL));
             item.setBorder(new EmptyBorder(Theme.SPACING_XS, Theme.SPACING_SM, Theme.SPACING_XS, Theme.SPACING_SM));
-            // Use a leading check glyph for the active item so it reads as a state, not a button
-            if (key == active)
-            {
-                item.setText("✓ " + key.getLabel());
-            }
-            else
-            {
-                item.setText("    " + key.getLabel());
-            }
             item.addActionListener(e -> onSortChanged.accept(key));
             menu.add(item);
         }

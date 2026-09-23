@@ -11,25 +11,25 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Consumer;
 
 /**
  * Small clickable badge representing an {@link AccountType}, rendered with
- * the actual OSRS sprites from the wiki:
+ * OSRS sprites:
  *
  * <ul>
- *   <li>The six Ironman variants (Ironman, HCIM, UIM, GIM, UGIM) use the
+ *   <li>The five Ironman variants (Ironman, HCIM, UIM, GIM, UGIM) use the
  *       official in-game chat badges.</li>
- *   <li>Main, Skiller, and Pure are not official in-game account types,
- *       so we use community-recognisable item/skill icons: a Bronze sword
- *       for Main, a Bronze pickaxe for Skiller, and a Granite maul for Pure.</li>
+ *   <li>Main, Skiller, and Pure are not official in-game account types, so
+ *       they use recognisable item/skill icons.</li>
  * </ul>
  *
- * Clicking opens a {@link JPopupMenu} listing all 8 types with their
- * matching sprite icons. Selecting one invokes the supplied callback.
+ * Clicking opens a {@link JPopupMenu} listing all types with their matching
+ * sprites. Selecting one invokes the supplied callback.
  *
- * Resources live under {@code /com/mylosis/roster/badges/}.
+ * Resources live under {@code /com/mylosis/roster/badges/}. EDT only.
  */
 @Slf4j
 public class AccountTypeBadge extends JComponent
@@ -51,57 +51,17 @@ public class AccountTypeBadge extends JComponent
         RESOURCE.put(AccountType.PURE,                   "pure.png");
     }
 
-    /** Class-loaded once; image is cheap to re-use across cards/popovers. */
-    private static final Map<AccountType, BufferedImage> CACHE = new EnumMap<>(AccountType.class);
-
-    private static BufferedImage iconFor(AccountType t)
-    {
-        if (t == null)
-        {
-            return null;
-        }
-        BufferedImage cached = CACHE.get(t);
-        if (cached != null)
-        {
-            // MISSING means a previous load failed — report "no icon" so the
-            // caller paints the same grey-dot fallback it always painted.
-            return cached == MISSING ? null : cached;
-        }
-        String resource = RESOURCE.get(t);
-        if (resource == null)
-        {
-            return null;
-        }
-        try
-        {
-            BufferedImage img = ImageUtil.loadImageResource(AccountTypeBadge.class, RESOURCE_BASE + resource);
-            CACHE.put(t, img);
-            return img;
-        }
-        catch (Exception e)
-        {
-            // Negative-cache the failure: paintComponent calls iconFor on
-            // every repaint, and an uncached miss meant re-attempting the
-            // resource load (and swallowing a fresh exception) per paint.
-            // MISSING is non-null so the cache hit short-circuits; painting
-            // treats it as "no icon" and draws the grey-dot fallback.
-            CACHE.put(t, MISSING);
-            log.warn("Failed to load badge icon {}", resource, e);
-            return null;
-        }
-    }
-
-    /** Sentinel for "load failed" — see iconFor. */
+    /** Sentinel for "load failed", so a missing resource is not retried on every paint. */
     private static final BufferedImage MISSING = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
+
+    /** Source sprites, loaded once. */
+    private static final Map<AccountType, BufferedImage> SOURCE_CACHE = new EnumMap<>(AccountType.class);
+    /** Sprites pre-scaled per display size, so painting is a plain blit. */
+    private static final Map<String, BufferedImage> SCALED_CACHE = new HashMap<>();
 
     private AccountType type;
     private final int size;
     private final Consumer<AccountType> onChange;
-
-    public AccountTypeBadge(AccountType type, Consumer<AccountType> onChange)
-    {
-        this(type, DEFAULT_SIZE, onChange);
-    }
 
     public AccountTypeBadge(AccountType type, int size, Consumer<AccountType> onChange)
     {
@@ -114,7 +74,7 @@ public class AccountTypeBadge extends JComponent
         setMaximumSize(dim);
         setMinimumSize(dim);
         setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        setToolTipText(this.type.getDisplayName() + " — click to change");
+        updateTooltip();
         setOpaque(false);
 
         addMouseListener(new MouseAdapter()
@@ -131,53 +91,55 @@ public class AccountTypeBadge extends JComponent
         });
     }
 
-    public void setType(AccountType newType)
+    private void setType(AccountType newType)
     {
         this.type = newType != null ? newType : AccountType.MAIN;
-        setToolTipText(this.type.getDisplayName() + " — click to change");
+        updateTooltip();
         repaint();
+    }
+
+    private void updateTooltip()
+    {
+        setToolTipText(type.getDisplayName() + " (click to change)");
     }
 
     @Override
     protected void paintComponent(Graphics g)
     {
-        BufferedImage icon = iconFor(type);
-        Graphics2D g2 = (Graphics2D) g.create();
-        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-        g2.setRenderingHint(RenderingHints.KEY_RENDERING,      RenderingHints.VALUE_RENDER_QUALITY);
-        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,   RenderingHints.VALUE_ANTIALIAS_ON);
-        if (icon == null)
+        if (!drawSprite(g, type, 0, 0, size))
         {
-            // Defensive fallback if the resource fails to load — a dim grey dot
-            // so the click target is still visible.
+            // Fallback if the resource failed to load: a dim grey dot, so the
+            // click target is still visible.
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             g2.setColor(new Color(110, 110, 110));
             g2.fillOval(0, 0, size - 1, size - 1);
+            g2.dispose();
         }
-        else
-        {
-            drawIconCentered(g2, icon, 0, 0, size);
-        }
-        g2.dispose();
     }
 
     /**
-     * Scale the icon to fit within a {@code box × box} square, preserving
-     * aspect ratio, and draw it centered at ({@code x},{@code y}).
+     * Draws the sprite centered in a {@code box x box} square at (x, y).
+     * Scaled once per device-pixel size, so painting is a plain blit that
+     * stays sharp on HiDPI displays. Returns false if the sprite is unavailable.
      */
-    private static void drawIconCentered(Graphics2D g2, BufferedImage img, int x, int y, int box)
+    private static boolean drawSprite(Graphics g, AccountType t, int x, int y, int box)
     {
-        int iw = img.getWidth();
-        int ih = img.getHeight();
-        if (iw <= 0 || ih <= 0)
+        Graphics2D g2 = (Graphics2D) g.create();
+        double scale = g2.getTransform().getScaleX();
+        if (scale <= 0)
         {
-            return;
+            scale = 1;
         }
-        double s = Math.min((double) box / iw, (double) box / ih);
-        int w = Math.max(1, (int) Math.round(iw * s));
-        int h = Math.max(1, (int) Math.round(ih * s));
-        int dx = x + (box - w) / 2;
-        int dy = y + (box - h) / 2;
-        g2.drawImage(img, dx, dy, w, h, null);
+        BufferedImage icon = scaledIcon(t, (int) Math.round(box * scale));
+        if (icon != null)
+        {
+            g2.translate(x + (box - icon.getWidth() / scale) / 2, y + (box - icon.getHeight() / scale) / 2);
+            g2.scale(1 / scale, 1 / scale);
+            g2.drawImage(icon, 0, 0, null);
+        }
+        g2.dispose();
+        return icon != null;
     }
 
     private void showPicker()
@@ -202,14 +164,12 @@ public class AccountTypeBadge extends JComponent
         item.setIcon(swatchIcon(t, 14));
         item.setIconTextGap(8);
         item.setBackground(Theme.BACKGROUND_DARKER);
-        item.setForeground(Theme.TEXT_PRIMARY);
-        item.setFont(Theme.fontRegular(item.getFont(), Theme.FONT_SIZE_SMALL));
+        boolean active = t == type;
+        item.setForeground(active ? Theme.ACCENT_ORANGE : Theme.TEXT_PRIMARY);
+        item.setFont(active
+            ? Theme.fontBold(item.getFont(), Theme.FONT_SIZE_SMALL)
+            : Theme.fontRegular(item.getFont(), Theme.FONT_SIZE_SMALL));
         item.setBorder(new EmptyBorder(Theme.SPACING_XS, Theme.SPACING_SM, Theme.SPACING_XS, Theme.SPACING_SM));
-        if (t == type)
-        {
-            item.setForeground(Theme.ACCENT_ORANGE);
-            item.setFont(Theme.fontBold(item.getFont(), Theme.FONT_SIZE_SMALL));
-        }
         item.addActionListener(e ->
         {
             setType(t);
@@ -219,9 +179,8 @@ public class AccountTypeBadge extends JComponent
     }
 
     /**
-     * Reusable icon swatch matching the badge rendering. Used by dropdown
-     * renderers (InlineAccountForm) and menu items so the picker UI is
-     * self-describing.
+     * Reusable icon matching the badge rendering. Used by the type dropdown
+     * (InlineAccountForm) and the picker menu so both are self-describing.
      */
     public static Icon swatchIcon(AccountType t, int size)
     {
@@ -230,17 +189,7 @@ public class AccountTypeBadge extends JComponent
             @Override
             public void paintIcon(Component c, Graphics g, int x, int y)
             {
-                BufferedImage icon = iconFor(t);
-                if (icon == null)
-                {
-                    return;
-                }
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-                g2.setRenderingHint(RenderingHints.KEY_RENDERING,      RenderingHints.VALUE_RENDER_QUALITY);
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,   RenderingHints.VALUE_ANTIALIAS_ON);
-                drawIconCentered(g2, icon, x, y, size);
-                g2.dispose();
+                drawSprite(g, t, x, y, size);
             }
 
             @Override
@@ -249,5 +198,57 @@ public class AccountTypeBadge extends JComponent
             @Override
             public int getIconHeight() { return size; }
         };
+    }
+
+    /** The sprite scaled to fit a {@code box x box} square, preserving aspect ratio; null if unavailable. */
+    private static BufferedImage scaledIcon(AccountType t, int box)
+    {
+        BufferedImage scaled = SCALED_CACHE.computeIfAbsent(t.name() + '@' + box, k -> {
+            BufferedImage source = sourceIcon(t);
+            return source != null ? scale(source, box) : MISSING;
+        });
+        return scaled == MISSING ? null : scaled;
+    }
+
+    private static BufferedImage sourceIcon(AccountType t)
+    {
+        BufferedImage cached = SOURCE_CACHE.get(t);
+        if (cached != null)
+        {
+            return cached == MISSING ? null : cached;
+        }
+        String resource = RESOURCE.get(t);
+        try
+        {
+            BufferedImage img = ImageUtil.loadImageResource(AccountTypeBadge.class, RESOURCE_BASE + resource);
+            SOURCE_CACHE.put(t, img);
+            return img;
+        }
+        catch (Exception e)
+        {
+            SOURCE_CACHE.put(t, MISSING);
+            log.warn("Failed to load badge icon {}", resource, e);
+            return null;
+        }
+    }
+
+    private static BufferedImage scale(BufferedImage img, int box)
+    {
+        int iw = img.getWidth();
+        int ih = img.getHeight();
+        if (iw <= 0 || ih <= 0)
+        {
+            return MISSING;
+        }
+        double s = Math.min((double) box / iw, (double) box / ih);
+        int w = Math.max(1, (int) Math.round(iw * s));
+        int h = Math.max(1, (int) Math.round(ih * s));
+        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = out.createGraphics();
+        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+        g2.drawImage(img, 0, 0, w, h, null);
+        g2.dispose();
+        return out;
     }
 }

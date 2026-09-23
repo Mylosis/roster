@@ -1,33 +1,51 @@
 package com.mylosis.roster.storage;
 
-import com.mylosis.roster.model.ImportDuplicateMode;
 import com.mylosis.roster.model.Account;
 import com.mylosis.roster.model.AccountData;
+import com.mylosis.roster.model.ImportDuplicateMode;
 import com.mylosis.roster.model.ProfileGroup;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 /**
- * Handles merging imported profile data with existing data,
- * including duplicate detection and resolution.
+ * Merges imported data into existing data, with duplicate detection and
+ * resolution. Duplicate lookups are served from indexes built once per merge
+ * and maintained as accounts are added, so large imports stay linear.
  *
- * <p>Duplicate lookups are served from indexes built once per merge and
- * maintained as accounts are added — the previous per-account linear scans
- * (plus the id-index rebuild that every {@code addAccount} invalidation
- * forced) made large imports O(n×m) on the EDT.
+ * <p>Imported categories and accounts are appended after the existing ones
+ * (keeping their relative order from the export) instead of keeping their
+ * exported {@code sortOrder}, which would interleave them with existing
+ * entries that happen to share the same numbers.
+ *
+ * <p>Single use: create a fresh instance for each merge.
  */
 public class AccountDataMerger
 {
-    /** id → existing account. */
+    /** id -> existing account. */
     private final Map<String, Account> byId = new HashMap<>();
-    /** lowercase {@code username + '\0' + alias} → existing account. */
+    /** lowercase {@code username + '\0' + alias} -> existing account. */
     private final Map<String, Account> byUsernameAlias = new HashMap<>();
     /** lowercase aliases currently in use. */
     private final Set<String> aliases = new HashSet<>();
+    /** existing account -> its index in the accounts list, for in-place updates. */
+    private final Map<Account, Integer> positions = new IdentityHashMap<>();
+    /** effective category id (null key = Uncategorized) -> next free sortOrder. */
+    private final Map<String, Integer> nextSortOrder = new HashMap<>();
+
+    private int accountsAdded;
+    private int accountsSkipped;
+    private int accountsUpdated;
+    private int groupsAdded;
+    private int groupsSkipped;
 
     /**
      * Merge imported data into existing data with duplicate handling.
@@ -35,34 +53,51 @@ public class AccountDataMerger
      */
     public ImportStats merge(AccountData existing, AccountData importData, ImportDuplicateMode duplicateMode)
     {
-        ImportStats stats = new ImportStats(0, 0, 0, 0, 0);
-
+        // Categories first: whether an imported account lands in a category or
+        // in Uncategorized depends on that category existing after the merge.
+        if (importData.getGroups() != null)
+        {
+            mergeGroups(existing, importData.getGroups());
+        }
         if (importData.getAccounts() != null)
         {
             buildIndexes(existing);
-            stats = mergeProfiles(existing, importData, duplicateMode, stats);
+            mergeAccounts(existing, importData.getAccounts(), duplicateMode);
         }
+        return new ImportStats(accountsAdded, accountsSkipped, accountsUpdated, groupsAdded, groupsSkipped);
+    }
 
-        if (importData.getGroups() != null)
+    private void mergeGroups(AccountData existing, List<ProfileGroup> imported)
+    {
+        List<ProfileGroup> ordered = new ArrayList<>(imported);
+        ordered.sort(Comparator.comparingInt(ProfileGroup::getSortOrder));
+        int next = existing.nextGroupSortOrder();
+        for (ProfileGroup group : ordered)
         {
-            stats = mergeGroups(existing, importData, stats);
+            if (existing.findGroupById(group.getId()) == null)
+            {
+                group.setSortOrder(next++);
+                existing.addGroup(group);
+                groupsAdded++;
+            }
+            else
+            {
+                groupsSkipped++;
+            }
         }
-
-        return stats;
     }
 
     private void buildIndexes(AccountData existing)
     {
-        byId.clear();
-        byUsernameAlias.clear();
-        aliases.clear();
-        if (existing.getAccounts() == null)
+        List<Account> accounts = existing.getAccounts();
+        for (int i = 0; i < accounts.size(); i++)
         {
-            return;
-        }
-        for (Account p : existing.getAccounts())
-        {
-            indexAccount(p);
+            Account account = accounts.get(i);
+            indexAccount(account);
+            positions.put(account, i);
+            String group = existing.effectiveGroupId(account);
+            int order = account.getMetadata() != null ? account.getMetadata().getSortOrder() : 0;
+            nextSortOrder.merge(group, order + 1, Math::max);
         }
     }
 
@@ -95,8 +130,7 @@ public class AccountDataMerger
             byUsernameAlias.remove(pairKey, p);
         }
         // Aliases are not removed: another account may share the alias, and
-        // keeping it only makes suffix generation more conservative — matching
-        // the old full-scan behavior is not required for correctness here.
+        // keeping it only makes suffix generation more conservative.
     }
 
     private static String usernameAliasKey(Account p)
@@ -109,72 +143,88 @@ public class AccountDataMerger
         return p.getUsername().toLowerCase(Locale.ROOT) + '\0' + alias.toLowerCase(Locale.ROOT);
     }
 
-    private ImportStats mergeProfiles(AccountData existing, AccountData importData,
-                                     ImportDuplicateMode duplicateMode, ImportStats stats)
+    private void mergeAccounts(AccountData existing, List<Account> imported, ImportDuplicateMode mode)
     {
-        for (Account profile : importData.getAccounts())
+        List<Account> ordered = new ArrayList<>(imported);
+        ordered.sort(AccountData.SORT_ORDER_COMPARATOR);
+        for (Account profile : ordered)
         {
             Account duplicate = findDuplicate(profile);
-
             if (duplicate == null)
             {
-                existing.addAccount(profile);
-                indexAccount(profile);
-                stats = stats.withAddedAccount();
+                append(existing, profile);
+                accountsAdded++;
             }
             else
             {
-                stats = handleDuplicate(existing, profile, duplicate, duplicateMode, stats);
+                handleDuplicate(existing, profile, duplicate, mode);
             }
         }
-        return stats;
     }
 
-    private ImportStats handleDuplicate(AccountData existing, Account profile, Account duplicate,
-                                       ImportDuplicateMode mode, ImportStats stats)
+    private void handleDuplicate(AccountData existing, Account profile, Account duplicate, ImportDuplicateMode mode)
     {
         switch (mode)
         {
             case ADD_WITH_SUFFIX:
-                String uniqueAlias = generateUniqueAlias(profile.getAlias());
-                profile.setAlias(uniqueAlias);
-                profile.setId(java.util.UUID.randomUUID().toString());
-                existing.addAccount(profile);
-                indexAccount(profile);
-                return stats.withSuffixedAccount();
-
-            case SKIP:
-                return stats.withSkippedAccount();
+                profile.setAlias(generateUniqueAlias(profile.getAlias()));
+                profile.setId(UUID.randomUUID().toString());
+                append(existing, profile);
+                accountsAdded++;
+                break;
 
             case UPDATE:
-                existing.removeAccount(duplicate.getId());
-                unindexAccount(duplicate);
-                profile.setId(duplicate.getId());
-                existing.addAccount(profile);
-                indexAccount(profile);
-                return stats.withUpdatedAccount();
+                replace(existing, duplicate, profile);
+                accountsUpdated++;
+                break;
 
+            case SKIP:
             default:
-                return stats.withSkippedAccount();
+                accountsSkipped++;
+                break;
         }
     }
 
-    private ImportStats mergeGroups(AccountData existing, AccountData importData, ImportStats stats)
+    /** Adds {@code profile} at the end of the category it will be shown in. */
+    private void append(AccountData existing, Account profile)
     {
-        for (ProfileGroup group : importData.getGroups())
+        String group = existing.effectiveGroupId(profile);
+        int order = nextSortOrder.getOrDefault(group, 0);
+        profile.ensureMetadata().setSortOrder(order);
+        nextSortOrder.put(group, order + 1);
+        existing.addAccount(profile);
+        positions.put(profile, existing.getAccounts().size() - 1);
+        indexAccount(profile);
+    }
+
+    /**
+     * Swaps {@code profile} into {@code duplicate}'s list slot and id. It keeps
+     * the duplicate's position when it stays in the same category, and is
+     * appended to its new category otherwise.
+     */
+    private void replace(AccountData existing, Account duplicate, Account profile)
+    {
+        int index = positions.remove(duplicate);
+        unindexAccount(duplicate);
+        profile.setId(duplicate.getId());
+
+        String oldGroup = existing.effectiveGroupId(duplicate);
+        String newGroup = existing.effectiveGroupId(profile);
+        boolean sameGroup = oldGroup == null ? newGroup == null : oldGroup.equals(newGroup);
+        if (sameGroup && duplicate.getMetadata() != null)
         {
-            ProfileGroup existingGroup = existing.findGroupById(group.getId());
-            if (existingGroup == null)
-            {
-                existing.addGroup(group);
-                stats = stats.withAddedGroup();
-            }
-            else
-            {
-                stats = stats.withSkippedGroup();
-            }
+            profile.ensureMetadata().setSortOrder(duplicate.getMetadata().getSortOrder());
         }
-        return stats;
+        else
+        {
+            int order = nextSortOrder.getOrDefault(newGroup, 0);
+            profile.ensureMetadata().setSortOrder(order);
+            nextSortOrder.put(newGroup, order + 1);
+        }
+
+        existing.replaceAccount(index, profile);
+        positions.put(profile, index);
+        indexAccount(profile);
     }
 
     private Account findDuplicate(Account importAccount)
@@ -189,7 +239,7 @@ public class AccountDataMerger
             }
         }
 
-        // Match by username AND alias — same login with different alias is intentional
+        // Match by username AND alias: same login with a different alias is intentional
         String pairKey = usernameAliasKey(importAccount);
         return pairKey != null ? byUsernameAlias.get(pairKey) : null;
     }

@@ -2,16 +2,14 @@ package com.mylosis.roster.ui;
 
 import com.mylosis.roster.RosterConfig;
 import com.mylosis.roster.RosterPlugin;
-import com.mylosis.roster.model.ImportDuplicateMode;
-import com.mylosis.roster.storage.ExportResult;
-import com.mylosis.roster.storage.ImportExportService;
-import com.mylosis.roster.storage.ImportResult;
 import com.mylosis.roster.storage.AccountStorage;
-import com.mylosis.roster.ui.components.ExpandingMenuButton;
+import com.mylosis.roster.storage.ExportResult;
+import com.mylosis.roster.storage.ImportResult;
 import com.mylosis.roster.ui.components.IconButton;
 import com.mylosis.roster.ui.components.Icons;
 import com.mylosis.roster.ui.components.NotificationToast;
 import com.mylosis.roster.ui.components.Theme;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import javax.swing.*;
@@ -20,173 +18,176 @@ import java.awt.*;
 import java.util.function.BiConsumer;
 
 /**
- * Builds the footer section of the Roster panel.
- * Contains profile count, clear-all button, and import/export menu.
+ * Builds the footer of the Roster panel: account count, view toggle,
+ * import/export menu, and the clear menu.
  */
 @Slf4j
-public class PanelFooterBuilder
+class PanelFooterBuilder
 {
+    /** What a "Clear" menu entry removes. */
+    @RequiredArgsConstructor
+    private enum ClearScope
+    {
+        ACCOUNTS("Clear All Accounts", true, false),
+        CATEGORIES("Clear All Categories", false, true),
+        EVERYTHING("Clear Everything", true, true);
+
+        private final String label;
+        private final boolean accounts;
+        private final boolean categories;
+    }
+
     private final RosterPlugin plugin;
     private final AccountStorage storage;
+    private final JComponent dialogParent;
     private final BiConsumer<String, NotificationToast.Type> showNotification;
     private final Runnable onRebuild;
 
-    public PanelFooterBuilder(RosterPlugin plugin, BiConsumer<String, NotificationToast.Type> showNotification,
-                              Runnable onRebuild)
+    private IconButton viewToggleButton;
+
+    PanelFooterBuilder(RosterPlugin plugin, JComponent dialogParent,
+                       BiConsumer<String, NotificationToast.Type> showNotification, Runnable onRebuild)
     {
         this.plugin = plugin;
         this.storage = plugin.getAccountStorage();
+        this.dialogParent = dialogParent;
         this.showNotification = showNotification;
         this.onRebuild = onRebuild;
     }
 
-    public JPanel build(JLabel accountCountLabel)
+    JPanel build(JLabel accountCountLabel)
     {
         JPanel footer = new JPanel(new BorderLayout(Theme.SPACING_SM, Theme.SPACING_SM));
         footer.setBackground(Theme.BACKGROUND);
         footer.setBorder(new EmptyBorder(Theme.SPACING_LG, 0, 0, 0));
-
         footer.add(accountCountLabel, BorderLayout.WEST);
+
+        viewToggleButton = new IconButton(Icons.GRID, null);
+        viewToggleButton.addActionListener(e -> plugin.getConfigManager().setConfiguration(
+            RosterConfig.CONFIG_GROUP, "gridView", !plugin.getConfig().gridView()));
+        refresh();
 
         JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, Theme.SPACING_XS, 0));
         rightPanel.setOpaque(false);
-        rightPanel.add(createViewToggleButton());
-        rightPanel.add(createImportExportMenu());
-        rightPanel.add(createClearAllButton());
-
+        rightPanel.add(viewToggleButton);
+        rightPanel.add(createImportExportButton());
+        rightPanel.add(createClearButton());
         footer.add(rightPanel, BorderLayout.EAST);
         return footer;
     }
 
-    private IconButton createViewToggleButton()
+    /**
+     * Syncs the view toggle with the config. Called on every rebuild, which
+     * also covers the setting being changed from RuneLite's config panel.
+     */
+    void refresh()
     {
-        boolean isGrid = plugin.getConfig().gridView();
-        String icon = isGrid ? Icons.LIST : Icons.GRID;
-        String tooltip = isGrid ? "Switch to list view" : "Switch to grid view";
+        boolean grid = plugin.getConfig().gridView();
+        viewToggleButton.updateIcon(grid ? Icons.LIST : Icons.GRID);
+        viewToggleButton.setToolTipText(grid ? "Switch to list view" : "Switch to grid view");
+    }
+
+    private IconButton createImportExportButton()
+    {
+        JPopupMenu menu = new JPopupMenu();
+        addItem(menu, "Import from Clipboard", this::doImport);
+        addItem(menu, "Export to Clipboard", this::doExport);
+        return menuButton(Icons.CLIPBOARD, "Export/Import accounts", menu);
+    }
+
+    private IconButton createClearButton()
+    {
+        JPopupMenu menu = new JPopupMenu();
+        addItem(menu, ClearScope.ACCOUNTS.label, () -> confirmClear(ClearScope.ACCOUNTS));
+        addItem(menu, ClearScope.CATEGORIES.label, () -> confirmClear(ClearScope.CATEGORIES));
+        menu.addSeparator();
+        addItem(menu, ClearScope.EVERYTHING.label, () -> confirmClear(ClearScope.EVERYTHING))
+            .setForeground(Theme.BUTTON_DANGER);
+        return menuButton(Icons.DELETE, "Clear...", menu);
+    }
+
+    /** An icon button that opens {@code menu} above itself (the footer sits at the bottom). */
+    private static IconButton menuButton(String icon, String tooltip, JPopupMenu menu)
+    {
         IconButton button = new IconButton(icon, tooltip);
-        button.addActionListener(e -> {
-            net.runelite.client.config.ConfigManager configManager = plugin.getConfigManager();
-            boolean current = plugin.getConfig().gridView();
-            boolean next = !current;
-            configManager.setConfiguration(RosterConfig.CONFIG_GROUP, "gridView", next);
-            // Update button icon and tooltip to reflect new state
-            button.updateIcon(next ? Icons.LIST : Icons.GRID);
-            button.setToolTipText(next ? "Switch to list view" : "Switch to grid view");
-        });
+        button.addActionListener(e -> menu.show(button, 0, -menu.getPreferredSize().height));
         return button;
     }
 
-    private IconButton createClearAllButton()
+    private static JMenuItem addItem(JPopupMenu menu, String label, Runnable action)
     {
-        IconButton button = new IconButton(Icons.DELETE, "Clear...");
-        JPopupMenu clearMenu = new JPopupMenu();
-
-        JMenuItem clearProfiles = new JMenuItem("Clear All Accounts");
-        clearProfiles.addActionListener(e -> confirmClear("accounts"));
-        clearMenu.add(clearProfiles);
-
-        JMenuItem clearCategories = new JMenuItem("Clear All Categories");
-        clearCategories.addActionListener(e -> confirmClear("categories"));
-        clearMenu.add(clearCategories);
-
-        clearMenu.addSeparator();
-
-        JMenuItem clearBoth = new JMenuItem("Clear Everything");
-        clearBoth.setForeground(Theme.BUTTON_DANGER);
-        clearBoth.addActionListener(e -> confirmClear("both"));
-        clearMenu.add(clearBoth);
-
-        button.addActionListener(e -> clearMenu.show(button, 0, -clearMenu.getPreferredSize().height));
-        return button;
-    }
-
-    private ExpandingMenuButton createImportExportMenu()
-    {
-        ExpandingMenuButton menu = new ExpandingMenuButton(Icons.CLIPBOARD, "Export/Import accounts");
-        menu.addMenuItem("Import from Clipboard", this::doImport);
-        menu.addMenuItem("Export to Clipboard", this::doExport);
-        return menu;
+        JMenuItem item = new JMenuItem(label);
+        item.addActionListener(e -> action.run());
+        menu.add(item);
+        return item;
     }
 
     private void doExport()
     {
-        ImportExportService service = plugin.getImportExportService();
-        ExportResult result = service.exportToClipboard();
-
-        if (result.success)
+        ExportResult result = plugin.getImportExportService().exportToClipboard();
+        if (result.isSuccess())
         {
-            showNotification.accept("Copied " + result.accountCount + " accounts, " + result.groupCount + " categories",
-                NotificationToast.Type.SUCCESS);
+            showNotification.accept("Copied " + result.getAccountCount() + " accounts, "
+                + result.getGroupCount() + " categories", NotificationToast.Type.SUCCESS);
         }
         else
         {
-            showNotification.accept("Copy failed: " + result.error, NotificationToast.Type.ERROR);
+            showNotification.accept("Copy failed: " + result.getError(), NotificationToast.Type.ERROR);
         }
     }
 
     private void doImport()
     {
-        ImportExportService service = plugin.getImportExportService();
-        ImportDuplicateMode duplicateMode = plugin.getConfig().importDuplicateMode();
-        ImportResult result = service.importFromClipboard(false, duplicateMode);
+        ImportResult result = plugin.getImportExportService().importFromClipboard(plugin.getConfig().importDuplicateMode());
+        log.debug("Import result: {}", result);
 
-        log.info("Import result: success={}, added={}, skipped={}, updated={}, error={}",
-            result.success, result.accountsAdded, result.accountsSkipped, result.accountsUpdated, result.error);
-
-        if (result.success)
+        if (!result.isSuccess())
         {
-            NotificationToast.Type type = result.hasChanges() ? NotificationToast.Type.SUCCESS : NotificationToast.Type.WARNING;
-            showNotification.accept(result.getDetailedMessage(), type);
-            if (result.hasChanges()) onRebuild.run();
+            showNotification.accept("Import failed: " + result.getError(), NotificationToast.Type.ERROR);
+            return;
         }
-        else
+        showNotification.accept(result.getDetailedMessage(),
+            result.hasChanges() ? NotificationToast.Type.SUCCESS : NotificationToast.Type.WARNING);
+        if (result.hasChanges())
         {
-            showNotification.accept("Import failed: " + result.error, NotificationToast.Type.ERROR);
+            onRebuild.run();
         }
     }
 
-    private void confirmClear(String mode)
+    private void confirmClear(ClearScope scope)
     {
         int accountCount = storage.getAccounts().size();
         int groupCount = storage.getGroups().size();
+        int affectedAccounts = scope.accounts ? accountCount : 0;
+        int affectedGroups = scope.categories ? groupCount : 0;
+        if (affectedAccounts == 0 && affectedGroups == 0)
+        {
+            showNotification.accept("Nothing to clear", NotificationToast.Type.INFO);
+            return;
+        }
 
         String message;
-        String title;
-        switch (mode)
+        switch (scope)
         {
-            case "accounts":
-                if (accountCount == 0) { showNotification.accept("No accounts to clear", NotificationToast.Type.INFO); return; }
+            case ACCOUNTS:
                 message = "Delete all " + accountCount + " accounts?\n\nThis cannot be undone.";
-                title = "Clear Accounts";
                 break;
-            case "categories":
-                if (groupCount == 0) { showNotification.accept("No categories to clear", NotificationToast.Type.INFO); return; }
-                message = "Delete all " + groupCount + " categories?\nProfiles will be moved to Uncategorized.";
-                title = "Clear Categories";
+            case CATEGORIES:
+                message = "Delete all " + groupCount + " categories?\nAccounts will be moved to Uncategorized.";
                 break;
+            case EVERYTHING:
             default:
-                if (accountCount == 0 && groupCount == 0) { showNotification.accept("Nothing to clear", NotificationToast.Type.INFO); return; }
-                message = "Delete all " + accountCount + " accounts and " + groupCount + " categories?\n\nThis cannot be undone.";
-                title = "Clear Everything";
+                message = "Delete all " + accountCount + " accounts and " + groupCount
+                    + " categories?\n\nThis cannot be undone.";
                 break;
         }
 
-        int result = JOptionPane.showConfirmDialog(
-            SwingUtilities.getWindowAncestor(plugin.getPanel()),
-            message, title, JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE
-        );
-
+        int result = JOptionPane.showConfirmDialog(SwingUtilities.getWindowAncestor(dialogParent),
+            message, scope.label, JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
         if (result == JOptionPane.YES_OPTION)
         {
-            if ("accounts".equals(mode) || "both".equals(mode))
-            {
-                storage.deleteAllProfiles();
-            }
-            if ("categories".equals(mode) || "both".equals(mode))
-            {
-                storage.deleteAllGroups();
-            }
-            showNotification.accept("Cleared " + mode, NotificationToast.Type.SUCCESS);
+            storage.clear(scope.accounts, scope.categories);
+            showNotification.accept("Cleared", NotificationToast.Type.SUCCESS);
             onRebuild.run();
         }
     }

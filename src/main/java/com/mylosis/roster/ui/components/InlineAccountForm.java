@@ -1,50 +1,59 @@
 package com.mylosis.roster.ui.components;
 
-import com.mylosis.roster.RosterPlugin;
 import com.mylosis.roster.model.Account;
+import com.mylosis.roster.model.AccountMetadata;
 import com.mylosis.roster.model.AccountType;
 import com.mylosis.roster.model.ProfileGroup;
-import com.mylosis.roster.model.AccountMetadata;
-import com.mylosis.roster.ui.GroupComboItem;
+import com.mylosis.roster.storage.AccountStorage;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
+import java.awt.event.ActionEvent;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
-import java.util.List;
+import java.util.Objects;
 import java.util.function.Consumer;
 
+/**
+ * The add/edit account form, shown inline in the panel header, a category, or
+ * an expanded card. Enter moves to the next field, Ctrl+Enter saves, Esc cancels.
+ */
 @Slf4j
 public class InlineAccountForm extends JPanel
 {
-    private final RosterPlugin plugin;
+    private final AccountStorage storage;
     private final Account existingAccount;
-    private final boolean showCategoryDropdown;
     private final String presetGroupId;
 
-    private JTextField usernameField;
-    private JTextField aliasField;
-    private JTextField notesField;
-    private JComboBox<GroupComboItem> categoryCombo;
-    // Only present when creating a new account (existingAccount == null).
-    // Editing existing accounts changes type via the card's clickable badge.
-    private JComboBox<AccountType> typeCombo;
+    private final JTextField usernameField = Controls.textField("Email or username");
+    private final JTextField aliasField = Controls.textField("Display name");
+    private final JTextField notesField = Controls.textField("Notes");
+    /** Null when the form is pinned to one category (a category's own "+" form). */
+    private final JComboBox<GroupComboItem> categoryCombo;
+    /** Only present when creating an account; existing accounts change type via the card badge. */
+    private final JComboBox<AccountType> typeCombo;
 
     @Setter
     private Consumer<Account> onSave;
     @Setter
     private Runnable onCancel;
 
-    public InlineAccountForm(RosterPlugin plugin, Account existingAccount,
+    /**
+     * @param existingAccount the account to edit, or null to create one
+     * @param showCategoryDropdown whether the user can pick the category
+     * @param presetGroupId the category to preselect (dropdown) or always use (no dropdown)
+     */
+    public InlineAccountForm(AccountStorage storage, Account existingAccount,
                              boolean showCategoryDropdown, String presetGroupId)
     {
-        this.plugin = plugin;
+        this.storage = storage;
         this.existingAccount = existingAccount;
-        this.showCategoryDropdown = showCategoryDropdown;
         this.presetGroupId = presetGroupId;
+        this.categoryCombo = showCategoryDropdown ? createCategoryCombo() : null;
+        this.typeCombo = existingAccount == null ? createTypeCombo() : null;
 
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
         setBackground(Theme.FORM_BACKGROUND);
@@ -58,126 +67,64 @@ public class InlineAccountForm extends JPanel
 
     private void buildForm()
     {
-        // Username field (required)
-        add(createFieldRow("Login *", usernameField = createTextField("Email or username")));
-        add(Box.createVerticalStrut(Theme.SPACING_XS));
-
-        // Alias field (optional)
-        add(createFieldRow("Alias", aliasField = createTextField("Display name")));
-        add(Box.createVerticalStrut(Theme.SPACING_XS));
-
-        // Category dropdown (optional based on context)
-        if (showCategoryDropdown)
+        addRow("Login *", usernameField, Theme.SPACING_XS);
+        addRow("Alias", aliasField, Theme.SPACING_XS);
+        if (categoryCombo != null)
         {
-            categoryCombo = new JComboBox<>();
-            categoryCombo.setBackground(Theme.BACKGROUND_DARKER);
-            categoryCombo.setForeground(Theme.TEXT_PRIMARY);
-            categoryCombo.setMaximumSize(new Dimension(Integer.MAX_VALUE, Theme.BUTTON_HEIGHT));
-            populateCategories();
-            add(createFieldRow("Category", categoryCombo));
-            add(Box.createVerticalStrut(Theme.SPACING_XS));
+            addRow("Category", categoryCombo, Theme.SPACING_XS);
         }
-
-        // Type dropdown — shown only when creating a new account.
-        // For existing accounts the badge on the card is the change affordance.
-        if (existingAccount == null)
+        if (typeCombo != null)
         {
-            typeCombo = new JComboBox<>(AccountType.values());
-            typeCombo.setBackground(Theme.BACKGROUND_DARKER);
-            typeCombo.setForeground(Theme.TEXT_PRIMARY);
-            typeCombo.setMaximumSize(new Dimension(Integer.MAX_VALUE, Theme.BUTTON_HEIGHT));
-            typeCombo.setRenderer(new AccountTypeComboRenderer());
-            typeCombo.setSelectedItem(AccountType.MAIN);
-            add(createFieldRow("Type", typeCombo));
-            add(Box.createVerticalStrut(Theme.SPACING_XS));
+            addRow("Type", typeCombo, Theme.SPACING_XS);
         }
-
-        // Notes field (single line for compactness)
-        add(createFieldRow("Notes", notesField = createTextField("Notes")));
-        add(Box.createVerticalStrut(Theme.SPACING_SM));
-
-        // Buttons
-        add(createButtonPanel());
+        addRow("Notes", notesField, Theme.SPACING_SM);
+        add(Controls.formButtons(this::doCancel, this::doSave));
     }
 
-    private JPanel createFieldRow(String labelText, JComponent field)
+    private void addRow(String label, JComponent field, int gapBelow)
     {
-        JPanel row = new JPanel(new BorderLayout(Theme.SPACING_XS, 0));
-        row.setOpaque(false);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, Theme.BUTTON_HEIGHT));
-        row.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JLabel label = new JLabel(labelText);
-        label.setForeground(Theme.TEXT_SECONDARY);
-        label.setFont(Theme.fontRegular(label.getFont(), Theme.FONT_SIZE_SMALL));
-        label.setPreferredSize(new Dimension(55, Theme.BUTTON_HEIGHT));
-        row.add(label, BorderLayout.WEST);
-        row.add(field, BorderLayout.CENTER);
-        return row;
+        add(Controls.fieldRow(label, field));
+        add(Box.createVerticalStrut(gapBelow));
     }
 
-    private JTextField createTextField(String tooltip)
+    private JComboBox<GroupComboItem> createCategoryCombo()
     {
-        JTextField field = new JTextField();
-        field.setBackground(Theme.BACKGROUND_DARKER);
-        field.setForeground(Theme.TEXT_PRIMARY);
-        field.setCaretColor(Theme.TEXT_PRIMARY);
-        field.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(Theme.CARD_BORDER),
-            new EmptyBorder(Theme.SPACING_XS, Theme.SPACING_SM, Theme.SPACING_XS, Theme.SPACING_SM)));
-        field.setFont(Theme.fontRegular(field.getFont(), Theme.FONT_SIZE_BODY));
-        field.setToolTipText(tooltip);
-        field.setMaximumSize(new Dimension(Integer.MAX_VALUE, Theme.BUTTON_HEIGHT));
-        return field;
+        JComboBox<GroupComboItem> combo = new JComboBox<>();
+        styleCombo(combo);
+        combo.addItem(GroupComboItem.UNCATEGORIZED);
+        for (ProfileGroup group : storage.getGroups())
+        {
+            combo.addItem(new GroupComboItem(group.getId(), group.getName()));
+        }
+        return combo;
     }
 
-    private void populateCategories()
+    private static JComboBox<AccountType> createTypeCombo()
     {
-        if (categoryCombo == null) return;
-        categoryCombo.addItem(new GroupComboItem(null, "Uncategorized"));
-        for (ProfileGroup group : plugin.getAccountStorage().getGroups())
-            categoryCombo.addItem(new GroupComboItem(group.getId(), group.getName()));
+        JComboBox<AccountType> combo = new JComboBox<>(AccountType.values());
+        styleCombo(combo);
+        combo.setRenderer(new AccountTypeComboRenderer());
+        combo.setSelectedItem(AccountType.MAIN);
+        return combo;
+    }
+
+    private static void styleCombo(JComboBox<?> combo)
+    {
+        combo.setBackground(Theme.BACKGROUND_DARKER);
+        combo.setForeground(Theme.TEXT_PRIMARY);
+        combo.setMaximumSize(new Dimension(Integer.MAX_VALUE, Theme.BUTTON_HEIGHT));
     }
 
     private void selectCategory(String groupId)
     {
-        if (categoryCombo == null) return;
         for (int i = 0; i < categoryCombo.getItemCount(); i++)
         {
-            GroupComboItem item = categoryCombo.getItemAt(i);
-            if ((groupId == null && item.id == null) || (groupId != null && groupId.equals(item.id)))
-            { categoryCombo.setSelectedIndex(i); return; }
+            if (Objects.equals(groupId, categoryCombo.getItemAt(i).getId()))
+            {
+                categoryCombo.setSelectedIndex(i);
+                return;
+            }
         }
-    }
-
-    private JPanel createButtonPanel()
-    {
-        JPanel panel = new JPanel(new GridLayout(1, 2, Theme.SPACING_XS, 0));
-        panel.setOpaque(false);
-        panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, Theme.BUTTON_HEIGHT_SM));
-        panel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JButton cancelButton = createButton("Cancel", Theme.BUTTON_SECONDARY, Theme.BUTTON_SECONDARY_HOVER);
-        cancelButton.addActionListener(e -> doCancel());
-        panel.add(cancelButton);
-        JButton saveButton = createButton("Save", Theme.BUTTON_PRIMARY, Theme.BUTTON_PRIMARY_HOVER);
-        saveButton.addActionListener(e -> doSave());
-        panel.add(saveButton);
-        return panel;
-    }
-
-    private JButton createButton(String text, Color background, Color hoverBackground)
-    {
-        JButton button = new JButton(text);
-        button.setBackground(background);
-        button.setForeground(Theme.TEXT_PRIMARY);
-        button.setFocusPainted(false);
-        button.setBorderPainted(false);
-        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        button.setFont(Theme.fontRegular(button.getFont(), Theme.FONT_SIZE_HEADING));
-        button.addMouseListener(new java.awt.event.MouseAdapter() {
-            @Override public void mouseEntered(java.awt.event.MouseEvent e) { button.setBackground(hoverBackground); }
-            @Override public void mouseExited(java.awt.event.MouseEvent e) { button.setBackground(background); }
-        });
-        return button;
     }
 
     private void populateFields()
@@ -188,28 +135,26 @@ public class InlineAccountForm extends JPanel
             aliasField.setText(existingAccount.getAlias());
             AccountMetadata meta = existingAccount.getMetadata();
             if (meta != null && meta.getNotes() != null) notesField.setText(meta.getNotes());
-            if (showCategoryDropdown) selectCategory(existingAccount.getGroupId());
+            if (categoryCombo != null) selectCategory(existingAccount.getGroupId());
         }
-        else if (showCategoryDropdown && presetGroupId != null) selectCategory(presetGroupId);
+        else if (categoryCombo != null && presetGroupId != null)
+        {
+            selectCategory(presetGroupId);
+        }
     }
 
     private void setupKeyboardShortcuts()
     {
-        getInputMap(WHEN_ANCESTOR_OF_FOCUSED_COMPONENT).put(
-            KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "save");
-        getActionMap().put("save", new AbstractAction() {
-            @Override public void actionPerformed(java.awt.event.ActionEvent e) { doSave(); }
-        });
+        bindKey(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.CTRL_DOWN_MASK), "save", this::doSave);
+        bindKey(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "cancel", this::doCancel);
 
-        getInputMap(WHEN_ANCESTOR_OF_FOCUSED_COMPONENT).put(
-            KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "cancel");
-        getActionMap().put("cancel", new AbstractAction() {
-            @Override public void actionPerformed(java.awt.event.ActionEvent e) { doCancel(); }
-        });
-
-        KeyAdapter enterAdapter = new KeyAdapter() {
-            @Override public void keyPressed(KeyEvent e) {
-                if (e.getKeyCode() == KeyEvent.VK_ENTER && !e.isControlDown()) {
+        KeyAdapter enterAdapter = new KeyAdapter()
+        {
+            @Override
+            public void keyPressed(KeyEvent e)
+            {
+                if (e.getKeyCode() == KeyEvent.VK_ENTER && !e.isControlDown())
+                {
                     e.consume();
                     // Component-local focus hop; the global focus-manager API is
                     // disallowed on the Plugin Hub (flagged in PR #13538).
@@ -222,89 +167,89 @@ public class InlineAccountForm extends JPanel
         notesField.addKeyListener(enterAdapter);
     }
 
+    private void bindKey(KeyStroke key, String name, Runnable action)
+    {
+        getInputMap(WHEN_ANCESTOR_OF_FOCUSED_COMPONENT).put(key, name);
+        getActionMap().put(name, new AbstractAction()
+        {
+            @Override
+            public void actionPerformed(ActionEvent e)
+            {
+                action.run();
+            }
+        });
+    }
+
     private void doSave()
     {
         String username = usernameField.getText().trim();
-        if (!validateUsername(username)) return;
+        if (username.isEmpty())
+        {
+            Controls.setInvalid(usernameField, true);
+            usernameField.requestFocusInWindow();
+            return;
+        }
 
-        Account profile = buildProfile(username);
-        applyGroupId(profile);
-        applyMetadata(profile);
+        String alias = emptyToNull(aliasField.getText());
+        Account account;
+        if (existingAccount != null)
+        {
+            account = existingAccount;
+            account.setUsername(username);
+            account.setAlias(alias);
+        }
+        else
+        {
+            account = Account.createNew(alias, username);
+        }
+        applyGroup(account);
+        applyMetadata(account);
+        Controls.setInvalid(usernameField, false);
 
-        // Log the id only — username is the login email, and debug logs end up
+        // Log the id only: username is the login email, and debug logs end up
         // in client.log files that users paste into bug reports.
-        log.debug("Inline form saving profile: {}", profile.getId());
+        log.debug("Inline form saving account: {}", account.getId());
 
         if (onSave != null)
         {
-            onSave.accept(profile);
+            onSave.accept(account);
         }
     }
 
-    private boolean validateUsername(String username)
+    private void applyGroup(Account account)
     {
-        if (!username.isEmpty()) return true;
-
-        usernameField.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(Theme.BUTTON_DANGER),
-            new EmptyBorder(Theme.SPACING_XS, Theme.SPACING_SM, Theme.SPACING_XS, Theme.SPACING_SM)
-        ));
-        usernameField.requestFocusInWindow();
-        return false;
-    }
-
-    private Account buildProfile(String username)
-    {
-        String alias = aliasField.getText().trim();
-
-        if (existingAccount != null)
-        {
-            existingAccount.setUsername(username);
-            existingAccount.setAlias(alias.isEmpty() ? null : alias);
-            return existingAccount;
-        }
-        return Account.createNew(alias.isEmpty() ? null : alias, username);
-    }
-
-    private void applyGroupId(Account profile)
-    {
-        if (showCategoryDropdown && categoryCombo != null)
+        String groupId = presetGroupId;
+        if (categoryCombo != null)
         {
             GroupComboItem selected = (GroupComboItem) categoryCombo.getSelectedItem();
-            profile.setGroupId(selected != null ? selected.id : null);
+            groupId = selected != null ? selected.getId() : null;
         }
-        else if (presetGroupId != null)
+        if (existingAccount != null && !Objects.equals(groupId, account.getGroupId()))
         {
-            profile.setGroupId(presetGroupId);
+            // Moved to another category: land at its end rather than at the
+            // old position number, which means nothing in the new category.
+            account.ensureMetadata().setSortOrder(storage.nextAccountSortOrder(groupId));
+        }
+        account.setGroupId(groupId);
+    }
+
+    private void applyMetadata(Account account)
+    {
+        AccountMetadata meta = account.ensureMetadata();
+        meta.setNotes(emptyToNull(notesField.getText()));
+        // Notes were mutated through the metadata object, which bypasses
+        // Account's invalidating setters; drop the cached search haystack.
+        account.invalidateSearchHaystack();
+        if (typeCombo != null && typeCombo.getSelectedItem() != null)
+        {
+            meta.setAccountType((AccountType) typeCombo.getSelectedItem());
         }
     }
 
-    private void applyMetadata(Account profile)
+    private static String emptyToNull(String text)
     {
-        String notes = notesField.getText().trim();
-        AccountMetadata meta = profile.getMetadata();
-        if (meta == null)
-        {
-            meta = AccountMetadata.createDefault();
-            profile.setMetadata(meta);
-        }
-        meta.setNotes(notes.isEmpty() ? null : notes);
-        // Notes were mutated through the metadata object directly, which
-        // bypasses Account's invalidating setters — drop the cached search
-        // haystack or searching for the new notes text misses until the next
-        // unrelated mutation. (saveAccount also invalidates, but not every
-        // onSave consumer routes through it.)
-        profile.invalidateSearchHaystack();
-        // Type only flows through the form for new accounts; existing accounts
-        // change type via the card badge popover.
-        if (typeCombo != null)
-        {
-            AccountType selectedType = (AccountType) typeCombo.getSelectedItem();
-            if (selectedType != null)
-            {
-                meta.setAccountType(selectedType);
-            }
-        }
+        String trimmed = text.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private void doCancel()
@@ -314,7 +259,7 @@ public class InlineAccountForm extends JPanel
 
     public void focusUsernameField()
     {
-        SwingUtilities.invokeLater(() -> usernameField.requestFocusInWindow());
+        SwingUtilities.invokeLater(usernameField::requestFocusInWindow);
     }
 
     public void clearFields()
@@ -325,16 +270,16 @@ public class InlineAccountForm extends JPanel
         if (categoryCombo != null)
         {
             categoryCombo.setSelectedIndex(0);
+            if (presetGroupId != null)
+            {
+                selectCategory(presetGroupId);
+            }
         }
         if (typeCombo != null)
         {
             typeCombo.setSelectedItem(AccountType.MAIN);
         }
-        // Reset username field border in case it was highlighted as error
-        usernameField.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(Theme.CARD_BORDER),
-            new EmptyBorder(Theme.SPACING_XS, Theme.SPACING_SM, Theme.SPACING_XS, Theme.SPACING_SM)
-        ));
+        Controls.setInvalid(usernameField, false);
     }
 
     /**

@@ -1,134 +1,48 @@
 package com.mylosis.roster.ui;
 
-import com.mylosis.roster.RosterPlugin;
-import com.mylosis.roster.model.Account;
 import com.mylosis.roster.model.ProfileGroup;
 import com.mylosis.roster.storage.AccountStorage;
+import com.mylosis.roster.ui.components.Controls;
 import com.mylosis.roster.ui.components.InlineAccountForm;
 import com.mylosis.roster.ui.components.Theme;
-import lombok.extern.slf4j.Slf4j;
+import lombok.Getter;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
+import java.awt.event.ActionEvent;
 
 /**
- * Manages the inline add-profile and add-category forms.
+ * The add-account and add-category forms that open below the header buttons.
+ * At most one of them is visible at a time.
  */
-@Slf4j
-public class PanelFormManager
+class PanelFormManager
 {
-    private final RosterPlugin plugin;
     private final AccountStorage storage;
     private final Runnable onRebuild;
     private final Runnable onRevalidate;
 
-    private JPanel addAccountFormPanel;
-    private InlineAccountForm addAccountForm;
-    private boolean addFormVisible = false;
+    /** Holds a fresh form on every open, so its category dropdown lists the current categories. */
+    @Getter
+    private final JPanel addAccountFormPanel;
 
-    private JPanel addCategoryFormPanel;
-    private JTextField categoryNameField;
-    private boolean addCategoryFormVisible = false;
+    @Getter
+    private final JPanel addCategoryFormPanel;
+    private final JTextField categoryNameField = Controls.textField(null);
 
-    public PanelFormManager(RosterPlugin plugin, Runnable onRebuild, Runnable onRevalidate)
+    PanelFormManager(AccountStorage storage, Runnable onRebuild, Runnable onRevalidate)
     {
-        this.plugin = plugin;
-        this.storage = plugin.getAccountStorage();
+        this.storage = storage;
         this.onRebuild = onRebuild;
         this.onRevalidate = onRevalidate;
+
+        addAccountFormPanel = formContainer(170);
+
+        addCategoryFormPanel = formContainer(70);
+        addCategoryFormPanel.add(buildCategoryForm(), BorderLayout.CENTER);
     }
 
-    public JPanel getAddProfileFormPanel()
-    {
-        if (addAccountFormPanel == null)
-        {
-            addAccountFormPanel = buildAddProfileFormPanel();
-        }
-        return addAccountFormPanel;
-    }
-
-    public JPanel getAddCategoryFormPanel()
-    {
-        if (addCategoryFormPanel == null)
-        {
-            addCategoryFormPanel = buildAddCategoryFormPanel();
-        }
-        return addCategoryFormPanel;
-    }
-
-    public boolean isAddFormVisible()
-    {
-        return addFormVisible;
-    }
-
-    public void hideAddForm()
-    {
-        if (addFormVisible)
-        {
-            addAccountFormPanel.setVisible(false);
-            addFormVisible = false;
-        }
-    }
-
-    public void toggleAddProfileForm(Runnable collapseExpandedCard)
-    {
-        if (addAccountFormPanel == null)
-        {
-            log.error("addAccountFormPanel is null!");
-            return;
-        }
-
-        if (addCategoryFormVisible)
-        {
-            addCategoryFormPanel.setVisible(false);
-            addCategoryFormVisible = false;
-        }
-
-        if (!addFormVisible)
-        {
-            collapseExpandedCard.run();
-        }
-
-        addFormVisible = !addFormVisible;
-        addAccountFormPanel.setVisible(addFormVisible);
-
-        if (addFormVisible)
-        {
-            SwingUtilities.invokeLater(() -> {
-                if (addAccountForm != null)
-                {
-                    addAccountForm.focusUsernameField();
-                }
-            });
-        }
-
-        onRevalidate.run();
-    }
-
-    public void toggleAddCategoryForm(Runnable collapseExpandedCard)
-    {
-        if (addFormVisible)
-        {
-            addAccountFormPanel.setVisible(false);
-            addFormVisible = false;
-        }
-
-        collapseExpandedCard.run();
-
-        addCategoryFormVisible = !addCategoryFormVisible;
-        addCategoryFormPanel.setVisible(addCategoryFormVisible);
-
-        if (addCategoryFormVisible)
-        {
-            categoryNameField.setText("");
-            SwingUtilities.invokeLater(() -> categoryNameField.requestFocusInWindow());
-        }
-
-        onRevalidate.run();
-    }
-
-    private JPanel buildAddProfileFormPanel()
+    private static JPanel formContainer(int height)
     {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBackground(Theme.FORM_BACKGROUND);
@@ -136,152 +50,117 @@ public class PanelFormManager
             new EmptyBorder(Theme.SPACING_SM, 0, 0, 0),
             BorderFactory.createLineBorder(Theme.CARD_BORDER, 1)
         ));
-        panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 170));
-        panel.setPreferredSize(new Dimension(200, 170));
+        panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, height));
+        panel.setPreferredSize(new Dimension(200, height));
         panel.setAlignmentX(Component.LEFT_ALIGNMENT);
         panel.setVisible(false);
-
-        addAccountForm = new InlineAccountForm(plugin, null, true, null);
-        addAccountForm.setOnSave(profile -> {
-            storage.saveAccount(profile);
-            addAccountForm.clearFields();
-            panel.setVisible(false);
-            addFormVisible = false;
-            onRebuild.run();
-        });
-        addAccountForm.setOnCancel(() -> {
-            addAccountForm.clearFields();
-            panel.setVisible(false);
-            addFormVisible = false;
-            onRevalidate.run();
-        });
-
-        panel.add(addAccountForm, BorderLayout.CENTER);
         return panel;
     }
 
-    private JPanel buildAddCategoryFormPanel()
+    private JPanel buildCategoryForm()
     {
-        JPanel panel = new JPanel(new BorderLayout());
-        panel.setBackground(Theme.FORM_BACKGROUND);
-        panel.setBorder(BorderFactory.createCompoundBorder(
-            new EmptyBorder(Theme.SPACING_SM, 0, 0, 0),
-            BorderFactory.createLineBorder(Theme.CARD_BORDER, 1)
-        ));
-        panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 70));
-        panel.setPreferredSize(new Dimension(200, 70));
-        panel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        panel.setVisible(false);
+        JPanel form = new JPanel();
+        form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
+        form.setBackground(Theme.FORM_BACKGROUND);
+        form.setBorder(new EmptyBorder(Theme.SPACING_SM, Theme.SPACING_SM, Theme.SPACING_SM, Theme.SPACING_SM));
 
-        JPanel innerPanel = new JPanel();
-        innerPanel.setLayout(new BoxLayout(innerPanel, BoxLayout.Y_AXIS));
-        innerPanel.setBackground(Theme.FORM_BACKGROUND);
-        innerPanel.setBorder(new EmptyBorder(Theme.SPACING_SM, Theme.SPACING_SM, Theme.SPACING_SM, Theme.SPACING_SM));
-
-        innerPanel.add(buildCategoryNameRow());
-        innerPanel.add(Box.createVerticalStrut(Theme.SPACING_SM));
-        innerPanel.add(buildCategoryButtonRow());
-
-        panel.add(innerPanel, BorderLayout.CENTER);
-
+        categoryNameField.addActionListener(e -> saveCategory());
         categoryNameField.getInputMap().put(KeyStroke.getKeyStroke("ESCAPE"), "cancel");
         categoryNameField.getActionMap().put("cancel", new AbstractAction()
         {
             @Override
-            public void actionPerformed(java.awt.event.ActionEvent e)
+            public void actionPerformed(ActionEvent e)
             {
                 cancelCategoryForm();
             }
         });
 
-        return panel;
+        form.add(Controls.fieldRow("Name", categoryNameField));
+        form.add(Box.createVerticalStrut(Theme.SPACING_SM));
+        form.add(Controls.formButtons(this::cancelCategoryForm, this::saveCategory));
+        return form;
     }
 
-    private JPanel buildCategoryNameRow()
+    private void showAddAccountForm()
     {
-        JPanel nameRow = new JPanel(new BorderLayout(Theme.SPACING_XS, 0));
-        nameRow.setOpaque(false);
-        nameRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, Theme.BUTTON_HEIGHT));
-        nameRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JLabel nameLabel = new JLabel("Name");
-        nameLabel.setForeground(Theme.TEXT_SECONDARY);
-        nameLabel.setFont(Theme.fontRegular(nameLabel.getFont(), Theme.FONT_SIZE_SMALL));
-        nameLabel.setPreferredSize(new Dimension(55, Theme.BUTTON_HEIGHT));
-        nameRow.add(nameLabel, BorderLayout.WEST);
-
-        categoryNameField = new JTextField();
-        categoryNameField.setBackground(Theme.BACKGROUND_DARKER);
-        categoryNameField.setForeground(Theme.TEXT_PRIMARY);
-        categoryNameField.setCaretColor(Theme.TEXT_PRIMARY);
-        categoryNameField.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(Theme.CARD_BORDER),
-            new EmptyBorder(Theme.SPACING_XS, Theme.SPACING_SM, Theme.SPACING_XS, Theme.SPACING_SM)
-        ));
-        categoryNameField.setFont(Theme.fontRegular(categoryNameField.getFont(), Theme.FONT_SIZE_BODY));
-        categoryNameField.addActionListener(e -> saveCategoryForm());
-        nameRow.add(categoryNameField, BorderLayout.CENTER);
-
-        return nameRow;
+        InlineAccountForm addAccountForm = new InlineAccountForm(storage, null, true, null);
+        addAccountForm.setOnSave(account -> {
+            storage.saveAccount(account);
+            hideAddAccountForm();
+            onRebuild.run();
+        });
+        addAccountForm.setOnCancel(() -> {
+            hideAddAccountForm();
+            onRevalidate.run();
+        });
+        addAccountFormPanel.removeAll();
+        addAccountFormPanel.add(addAccountForm, BorderLayout.CENTER);
+        addAccountFormPanel.setVisible(true);
+        addAccountForm.focusUsernameField();
     }
 
-    private JPanel buildCategoryButtonRow()
+    /** Hides the add-account form if it is open. */
+    void hideAddAccountForm()
     {
-        JPanel buttonPanel = new JPanel(new GridLayout(1, 2, Theme.SPACING_XS, 0));
-        buttonPanel.setOpaque(false);
-        buttonPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, Theme.BUTTON_HEIGHT_SM));
-        buttonPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JButton cancelButton = new JButton("Cancel");
-        cancelButton.setBackground(Theme.BUTTON_SECONDARY);
-        cancelButton.setForeground(Theme.TEXT_PRIMARY);
-        cancelButton.setFocusPainted(false);
-        cancelButton.setBorderPainted(false);
-        cancelButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        cancelButton.setFont(Theme.fontRegular(cancelButton.getFont(), Theme.FONT_SIZE_HEADING));
-        cancelButton.addActionListener(e -> cancelCategoryForm());
-        buttonPanel.add(cancelButton);
-
-        JButton saveButton = new JButton("Save");
-        saveButton.setBackground(Theme.BUTTON_PRIMARY);
-        saveButton.setForeground(Theme.TEXT_PRIMARY);
-        saveButton.setFocusPainted(false);
-        saveButton.setBorderPainted(false);
-        saveButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        saveButton.setFont(Theme.fontRegular(saveButton.getFont(), Theme.FONT_SIZE_HEADING));
-        saveButton.addActionListener(e -> saveCategoryForm());
-        buttonPanel.add(saveButton);
-
-        return buttonPanel;
+        addAccountFormPanel.setVisible(false);
+        addAccountFormPanel.removeAll();
     }
 
-    private void saveCategoryForm()
+    void toggleAddAccountForm(Runnable collapseExpandedCard)
+    {
+        addCategoryFormPanel.setVisible(false);
+        boolean show = !addAccountFormPanel.isVisible();
+        if (show)
+        {
+            collapseExpandedCard.run();
+            showAddAccountForm();
+        }
+        else
+        {
+            hideAddAccountForm();
+        }
+        onRevalidate.run();
+    }
+
+    void toggleAddCategoryForm(Runnable collapseExpandedCard)
+    {
+        hideAddAccountForm();
+        collapseExpandedCard.run();
+
+        boolean show = !addCategoryFormPanel.isVisible();
+        addCategoryFormPanel.setVisible(show);
+        if (show)
+        {
+            categoryNameField.setText("");
+            SwingUtilities.invokeLater(categoryNameField::requestFocusInWindow);
+        }
+        onRevalidate.run();
+    }
+
+    private void saveCategory()
     {
         String name = categoryNameField.getText().trim();
-        if (!name.isEmpty())
+        if (name.isEmpty())
         {
-            ProfileGroup group = ProfileGroup.createNew(name);
-            // Auto-assign a default color based on existing category count
-            int existingCount = storage.getGroups().size();
-            Color[] palette = Theme.DEFAULT_CATEGORY_COLORS;
-            if (existingCount < palette.length)
-            {
-                Color c = palette[existingCount];
-                group.setColor(String.format("#%02X%02X%02X", c.getRed(), c.getGreen(), c.getBlue()));
-            }
-            storage.saveGroup(group);
-            categoryNameField.setText("");
-            addCategoryFormPanel.setVisible(false);
-            addCategoryFormVisible = false;
-            onRebuild.run();
+            return;
         }
+        ProfileGroup group = ProfileGroup.createNew(name);
+        // Auto-assign a default color by creation order.
+        int existingCount = storage.getGroups().size();
+        if (existingCount < Theme.DEFAULT_CATEGORY_COLORS.length)
+        {
+            group.setColor(Theme.colorToHex(Theme.DEFAULT_CATEGORY_COLORS[existingCount]));
+        }
+        storage.saveGroup(group);
+        categoryNameField.setText("");
+        addCategoryFormPanel.setVisible(false);
+        onRebuild.run();
     }
 
     private void cancelCategoryForm()
     {
         categoryNameField.setText("");
         addCategoryFormPanel.setVisible(false);
-        addCategoryFormVisible = false;
         onRevalidate.run();
     }
 }

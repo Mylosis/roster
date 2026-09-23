@@ -1,29 +1,36 @@
 package com.mylosis.roster.ui;
 
 import com.mylosis.roster.RosterConfig;
+import com.mylosis.roster.RosterPlugin;
 import com.mylosis.roster.model.Account;
+import com.mylosis.roster.ui.components.AccountTypeBadge;
+import com.mylosis.roster.ui.components.SafeText;
 import com.mylosis.roster.ui.components.Theme;
 
 import javax.swing.*;
+import javax.swing.text.JTextComponent;
 import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.util.Arrays;
 
 /**
- * Shared utility methods for profile card rendering.
- * Extracted from AccountCardPanel to keep file sizes manageable.
+ * Shared building blocks for account cards in both list and grid view.
  */
-public final class AccountCardHelper
+final class AccountCardHelper
 {
     private AccountCardHelper() {} // Prevent instantiation
 
     /**
-     * Creates a small green dot indicating the profile is currently logged in.
+     * Creates a small green dot indicating the account is currently logged in.
      */
-    public static JPanel createOnlineDot()
+    static JPanel createOnlineDot()
     {
         int size = Theme.ONLINE_DOT_SIZE;
-        JPanel dot = new JPanel() {
+        JPanel dot = new JPanel()
+        {
             @Override
-            protected void paintComponent(Graphics g) {
+            protected void paintComponent(Graphics g)
+            {
                 super.paintComponent(g);
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -40,71 +47,31 @@ public final class AccountCardHelper
     }
 
     /**
-     * Creates a JLabel that truncates text beyond maxChars with an ellipsis.
+     * A plain-text label showing at most {@code maxChars} characters, cut at a
+     * word boundary where possible, with the full text as its tooltip.
      */
-    public static JLabel createTruncatingLabel(String text, Color color, Font font, int maxChars)
+    static JLabel truncatingLabel(String text, Color color, Font font, int maxChars)
     {
         String display = text;
-        if (text != null && text.length() > maxChars)
+        boolean truncated = text != null && text.length() > maxChars;
+        if (truncated)
         {
-            // Truncate at last space before limit to avoid cutting mid-word
             String trimmed = text.substring(0, maxChars);
             int lastSpace = trimmed.lastIndexOf(' ');
-            display = (lastSpace > maxChars / 2) ? trimmed.substring(0, lastSpace) + "..." : trimmed + "...";
+            display = (lastSpace > maxChars / 2 ? trimmed.substring(0, lastSpace) : trimmed) + "...";
         }
-        JLabel label = new JLabel(display);
-        // User-controlled text (alias/login/notes — importable from clipboard
-        // JSON) must never activate Swing's HTML renderer: a value starting
-        // with <html> would break rendering, and an embedded <img src> fires
-        // an outbound HTTP request when the label paints.
-        label.putClientProperty("html.disable", Boolean.TRUE);
+        JLabel label = SafeText.plain(new JLabel(display));
         label.setForeground(color);
         label.setFont(font);
-        if (text != null && text.length() > maxChars) label.setToolTipText(safeTooltip(text));
+        if (truncated) label.setToolTipText(SafeText.htmlSafe(text));
         return label;
     }
 
     /**
-     * Returns a tooltip-safe version of user-controlled text. Normal strings
-     * pass through untouched (identical rendering); strings Swing would treat
-     * as HTML are escaped so they display as literal text instead.
+     * Revalidates a component and repaints its enclosing scroll pane, the
+     * layout boundary for everything inside the card list.
      */
-    public static String safeTooltip(String text)
-    {
-        if (text == null || !javax.swing.plaf.basic.BasicHTML.isHTMLString(text))
-        {
-            return text;
-        }
-        return "<html>" + escapeHtml(text) + "</html>";
-    }
-
-    /**
-     * Disables HTML interpretation on a label that displays user-controlled
-     * text. Returns the label for chaining.
-     */
-    public static JLabel plainTextOnly(JLabel label)
-    {
-        label.putClientProperty("html.disable", Boolean.TRUE);
-        return label;
-    }
-
-    /**
-     * Escapes HTML special characters for safe display in HTML-rendered labels.
-     */
-    public static String escapeHtml(String text)
-    {
-        if (text == null) return "";
-        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            .replace("\"", "&quot;").replace("\n", "<br>");
-    }
-
-    /**
-     * Revalidates and repaints the component's enclosing scroll pane — the
-     * layout boundary for anything inside the plugin's card list. This used to
-     * walk every ancestor up to (and including) the RuneLite window, repainting
-     * the whole client per call.
-     */
-    public static void revalidateToWindow(Component component)
+    static void revalidateScrollPane(Component component)
     {
         component.revalidate();
         Container scrollPane = SwingUtilities.getAncestorOfClass(JScrollPane.class, component);
@@ -124,7 +91,7 @@ public final class AccountCardHelper
      * (e.g. "just now", "5m ago", "3h ago", "2d ago", "4mo ago", "1y ago").
      * Returns null for null or future-dated input.
      */
-    public static String formatTimeAgo(Long epochMillis)
+    static String formatTimeAgo(Long epochMillis)
     {
         if (epochMillis == null)
         {
@@ -151,26 +118,80 @@ public final class AccountCardHelper
     }
 
     /**
-     * Resolves the display name for a profile based on privacy settings.
-     * Used by both AccountCardPanel (list view) and GridAccountBuilder (grid view).
+     * The name to show on a card under the current privacy settings.
      */
-    public static String resolveDisplayName(Account profile, RosterConfig config)
+    static String resolveDisplayName(Account account, RosterConfig config)
     {
-        boolean allHidden = config.hideAlias() && config.hideLogin();
         String displayName;
-        if (allHidden)
+        if (config.hideAlias() && config.hideLogin())
         {
             displayName = "Account";
         }
         else if (config.hideAlias())
         {
-            displayName = profile.getUsername();
+            displayName = account.getUsername();
         }
         else
         {
-            displayName = profile.getDisplayName();
+            displayName = account.getDisplayName();
         }
-        if (displayName == null) displayName = profile.getUsername();
-        return displayName;
+        return displayName != null ? displayName : account.getUsername();
+    }
+
+    /** Whether {@code account} is the character currently logged in on this client. */
+    static boolean isOnline(RosterPlugin plugin, Account account)
+    {
+        String loggedIn = plugin.getLoggedInName();
+        // Prefer the learned in-game character name; the display name only
+        // matches by coincidence when the alias equals the character name.
+        String matchName = account.getCharacterName() != null
+            ? account.getCharacterName()
+            : account.getDisplayName();
+        return loggedIn != null && loggedIn.equalsIgnoreCase(matchName);
+    }
+
+    /**
+     * The clickable account-type badge. Picking a type saves it and refreshes
+     * just this card.
+     */
+    static AccountTypeBadge createTypeBadge(RosterPlugin plugin, RosterPanel panel, Account account, int size)
+    {
+        return new AccountTypeBadge(account.resolveAccountType(), size, newType ->
+        {
+            account.ensureMetadata().setAccountType(newType);
+            plugin.getAccountStorage().saveAccount(account);
+            panel.refreshAccount(account.getId());
+        });
+    }
+
+    /**
+     * Adds {@code listener} to {@code root} and every descendant that doesn't
+     * already have it, so it can be re-run after a card rebuilds its content.
+     * With {@code skipControls}, buttons, badges, and fields (which handle
+     * their own clicks) and their children are left out.
+     */
+    static void attachToTree(Component root, MouseAdapter listener, boolean skipControls)
+    {
+        if (!Arrays.asList(root.getMouseListeners()).contains(listener))
+        {
+            root.addMouseListener(listener);
+            root.addMouseMotionListener(listener);
+        }
+        if (root instanceof Container)
+        {
+            for (Component child : ((Container) root).getComponents())
+            {
+                if (!skipControls || !isInteractive(child))
+                {
+                    attachToTree(child, listener, skipControls);
+                }
+            }
+        }
+    }
+
+    private static boolean isInteractive(Component c)
+    {
+        return c instanceof AbstractButton || c instanceof AccountTypeBadge
+            || c instanceof JTextComponent || c instanceof JComboBox;
     }
 }

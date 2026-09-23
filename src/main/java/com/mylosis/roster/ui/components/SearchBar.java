@@ -7,6 +7,7 @@ import javax.swing.Timer;
 import javax.swing.border.EmptyBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
+import java.awt.BasicStroke;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Cursor;
@@ -18,6 +19,7 @@ import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.util.Locale;
 import java.util.function.Consumer;
 
 /**
@@ -36,7 +38,7 @@ public class SearchBar extends JPanel
      * Debounce coalesces rapid keystrokes into a single search invocation.
      * Each typed character triggers a full panel rebuild downstream, so without
      * this a 10-character query meant 10 teardown-and-rebuild cycles. 120ms is
-     * imperceptible to users but eliminates the burst — restart()-on-edit means
+     * imperceptible to users but eliminates the burst: restart()-on-edit means
      * we only fire once the user actually pauses.
      */
     private static final int SEARCH_DEBOUNCE_MS = 120;
@@ -69,7 +71,7 @@ public class SearchBar extends JPanel
                 int size = 12;
                 int x = (getWidth() - size) / 2;
                 int y = (getHeight() - size) / 2;
-                g2.setStroke(new java.awt.BasicStroke(1.5f));
+                g2.setStroke(new BasicStroke(1.5f));
                 g2.drawOval(x, y, size - 4, size - 4);
                 g2.drawLine(x + size - 5, y + size - 5, x + size - 1, y + size - 1);
                 g2.dispose();
@@ -175,7 +177,7 @@ public class SearchBar extends JPanel
                 int size = 12;
                 int x = (getWidth() - size) / 2;
                 int y = (getHeight() - size) / 2;
-                g2.setStroke(new java.awt.BasicStroke(1.5f));
+                g2.setStroke(new BasicStroke(1.5f));
 
                 // Draw arc (270 degrees, leaving gap for arrow)
                 g2.drawArc(x, y, size, size, 45, 270);
@@ -243,7 +245,7 @@ public class SearchBar extends JPanel
     {
         if (onSearchChanged != null)
         {
-            onSearchChanged.accept(textField.getText().toLowerCase().trim());
+            onSearchChanged.accept(textField.getText().toLowerCase(Locale.ROOT).trim());
         }
     }
 
@@ -252,21 +254,11 @@ public class SearchBar extends JPanel
         this.onSearchChanged = callback;
     }
 
-    public String getText()
-    {
-        return textField.getText();
-    }
-
-    public void setText(String text)
-    {
-        textField.setText(text);
-    }
-
     public void clear()
     {
         textField.setText("");
-        textField.requestFocus();
-        // Clear is an explicit user action — flush any pending debounce so the
+        textField.requestFocusInWindow();
+        // Clear is an explicit user action: flush any pending debounce so the
         // filtered list updates immediately rather than after a brief delay.
         if (searchDebounceTimer.isRunning())
         {

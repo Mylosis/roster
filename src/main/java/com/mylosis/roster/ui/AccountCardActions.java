@@ -1,81 +1,77 @@
 package com.mylosis.roster.ui;
 
-import com.google.gson.Gson;
 import com.mylosis.roster.RosterPlugin;
 import com.mylosis.roster.model.Account;
-import com.mylosis.roster.model.AccountData;
+import com.mylosis.roster.model.ProfileGroup;
+import com.mylosis.roster.storage.AccountStorage;
+import com.mylosis.roster.storage.ExportResult;
+import com.mylosis.roster.ui.components.GroupComboItem;
 import com.mylosis.roster.ui.components.NotificationToast;
+import com.mylosis.roster.ui.components.SafeText;
 import com.mylosis.roster.ui.components.Theme;
 
 import javax.swing.*;
-import java.awt.*;
-import java.awt.datatransfer.StringSelection;
+import java.util.List;
+import java.util.Objects;
 
 /**
- * Handles context menu actions for an account card:
- * edit, copy username, move to category, and delete.
+ * The context menu of an account card: edit, copy login, export, move to
+ * category, and delete.
  */
-public class AccountCardActions
+class AccountCardActions
 {
     private final RosterPlugin plugin;
-    private final Account profile;
-    private final Runnable onExpand;
+    private final RosterPanel panel;
+    private final Account account;
+    private final Runnable onEdit;
 
-    public AccountCardActions(RosterPlugin plugin, Account profile, Runnable onExpand)
+    AccountCardActions(RosterPlugin plugin, RosterPanel panel, Account account, Runnable onEdit)
     {
         this.plugin = plugin;
-        this.profile = profile;
-        this.onExpand = onExpand;
+        this.panel = panel;
+        this.account = account;
+        this.onEdit = onEdit;
     }
 
-    public JPopupMenu createContextMenu()
+    JPopupMenu createContextMenu()
     {
         JPopupMenu menu = new JPopupMenu();
 
-        JMenuItem editItem = new JMenuItem("Edit");
-        editItem.addActionListener(e -> onExpand.run());
-        menu.add(editItem);
-
-        JMenuItem copyUsernameItem = new JMenuItem("Copy Username");
-        copyUsernameItem.addActionListener(e -> copyToClipboard(profile.getUsername()));
-        menu.add(copyUsernameItem);
-
-        JMenuItem exportItem = new JMenuItem("Export to Clipboard");
-        exportItem.addActionListener(e -> exportProfile());
-        menu.add(exportItem);
-
+        addItem(menu, "Edit", onEdit);
+        addItem(menu, "Copy Username", () -> plugin.getImportExportService().copyToClipboard(account.getUsername()));
+        addItem(menu, "Export to Clipboard", this::exportAccount);
         menu.addSeparator();
-
-        JMenuItem moveToCategoryItem = new JMenuItem("Move to Category...");
-        moveToCategoryItem.addActionListener(e -> showMoveToCategoryDialog());
-        menu.add(moveToCategoryItem);
-
+        addItem(menu, "Move to Category...", this::showMoveToCategoryDialog);
         menu.addSeparator();
-
-        JMenuItem deleteItem = new JMenuItem("Delete");
-        deleteItem.setForeground(Theme.BUTTON_DANGER);
-        deleteItem.addActionListener(e -> confirmDelete());
-        menu.add(deleteItem);
+        addItem(menu, "Delete", this::confirmDelete).setForeground(Theme.BUTTON_DANGER);
 
         return menu;
     }
 
+    private static JMenuItem addItem(JPopupMenu menu, String label, Runnable action)
+    {
+        JMenuItem item = new JMenuItem(label);
+        item.addActionListener(e -> action.run());
+        menu.add(item);
+        return item;
+    }
+
     private void showMoveToCategoryDialog()
     {
-        var groups = plugin.getAccountStorage().getGroups();
+        AccountStorage storage = plugin.getAccountStorage();
+        List<ProfileGroup> groups = storage.getGroups();
 
-        // Wrapper objects (toString = name) instead of name strings: resolving
-        // the selection back via indexOf(name) sent the account to the FIRST
-        // category with that name whenever two categories shared a name.
+        // Items wrap the id (two categories can share a name) and render the
+        // name HTML-safe (the dialog shows them through a JLabel).
         GroupComboItem[] choices = new GroupComboItem[groups.size() + 1];
-        choices[0] = new GroupComboItem(null, "Uncategorized");
+        choices[0] = GroupComboItem.UNCATEGORIZED;
         for (int i = 0; i < groups.size(); i++)
         {
             choices[i + 1] = new GroupComboItem(groups.get(i).getId(), groups.get(i).getName());
         }
 
         GroupComboItem selected = (GroupComboItem) JOptionPane.showInputDialog(
-            SwingUtilities.getWindowAncestor(plugin.getPanel()),
+            SwingUtilities.getWindowAncestor(panel),
             "Select category:",
             "Move to Category",
             JOptionPane.PLAIN_MESSAGE,
@@ -84,12 +80,15 @@ public class AccountCardActions
             choices[0]
         );
 
-        if (selected != null)
+        if (selected == null || Objects.equals(selected.getId(), account.getGroupId()))
         {
-            profile.setGroupId(selected.id);
-            plugin.getAccountStorage().saveAccount(profile);
-            plugin.getPanel().rebuild();
+            return;
         }
+        // Land at the end of the new category.
+        account.ensureMetadata().setSortOrder(storage.nextAccountSortOrder(selected.getId()));
+        account.setGroupId(selected.getId());
+        storage.saveAccount(account);
+        panel.rebuild();
     }
 
     private void confirmDelete()
@@ -97,47 +96,32 @@ public class AccountCardActions
         if (plugin.getConfig().confirmDelete())
         {
             int result = JOptionPane.showConfirmDialog(
-                SwingUtilities.getWindowAncestor(plugin.getPanel()),
-                "Are you sure you want to delete \"" + profile.getDisplayName() + "\"?",
+                SwingUtilities.getWindowAncestor(panel),
+                "Are you sure you want to delete \"" + SafeText.singleLine(account.getDisplayName()) + "\"?",
                 "Confirm Delete",
                 JOptionPane.YES_NO_OPTION,
                 JOptionPane.WARNING_MESSAGE
             );
-
             if (result != JOptionPane.YES_OPTION)
             {
                 return;
             }
         }
 
-        plugin.getAccountStorage().deleteProfile(profile.getId());
-        plugin.getPanel().rebuild();
+        plugin.getAccountStorage().deleteAccount(account.getId());
+        panel.rebuild();
     }
 
-    private void exportProfile()
+    private void exportAccount()
     {
-        Gson gson = plugin.getGson().newBuilder().setPrettyPrinting().create();
-        // Wrap single profile in AccountData envelope for consistent import format
-        AccountData wrapper = AccountData.builder()
-            .version(AccountData.CURRENT_VERSION)
-            .accounts(java.util.Collections.singletonList(profile))
-            .groups(new java.util.ArrayList<>())
-            .build();
-        String json = gson.toJson(wrapper);
-        copyToClipboard(json);
-        if (plugin.getPanel() != null)
+        ExportResult result = plugin.getImportExportService().exportAccountToClipboard(account);
+        if (result.isSuccess())
         {
-            plugin.getPanel().showNotification("Exported " + profile.getDisplayName(), NotificationToast.Type.SUCCESS);
+            panel.showNotification("Exported " + account.getDisplayName(), NotificationToast.Type.SUCCESS);
         }
-    }
-
-    private void copyToClipboard(String text)
-    {
-        if (text != null)
+        else
         {
-            Toolkit.getDefaultToolkit()
-                .getSystemClipboard()
-                .setContents(new StringSelection(text), null);
+            panel.showNotification("Export failed: " + result.getError(), NotificationToast.Type.ERROR);
         }
     }
 }

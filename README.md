@@ -2,7 +2,7 @@
 
 A RuneLite plugin for managing multiple OSRS accounts. Organize your mains, alts, and pures into color-coded categories, switch between them with a single click, and have everything cloud-sync across your machines via your RuneLite account. Inspired by [Profiles Plugin.](https://runelite.net/plugin-hub/show/profiles-panel)
 
-![Roster plugin panel — drag-and-drop reordering of accounts within a category](https://raw.githubusercontent.com/Mylosis/roster/main/docs/screenshots/drag.gif)
+![Roster plugin panel: drag-and-drop reordering of accounts within a category](https://raw.githubusercontent.com/Mylosis/roster/main/docs/screenshots/drag.gif)
 
 ## Features
 
@@ -15,7 +15,7 @@ A RuneLite plugin for managing multiple OSRS accounts. Organize your mains, alts
 - **Online Indicator**: Green dot shows which account is logged in on the current client
 - **Search**: Filter accounts by name, username, or notes
 - **Drag & Drop**: Reorder accounts and move them between categories
-- **Account Type Badges**: Mark each account as Ironman, HCIM, UIM, GIM, UGIM, Skiller, Pure, or Main — click any badge to change it on the fly
+- **Account Type Badges**: Mark each account as Ironman, HCIM, UIM, GIM, UGIM, Skiller, Pure, or Main; click any badge to change it on the fly
 - **Sort Options**: Sort each list by name, last online, date added, or your manual drag order
 - **Last Online**: Cards show when each account was last seen logged in on this client
 - **Cloud Sync**: Account data syncs across your machines via your RuneLite account (with a local backup retained too)
@@ -55,7 +55,7 @@ A RuneLite plugin for managing multiple OSRS accounts. Organize your mains, alts
 | Hide Alias | Hide alias, show login only | Off |
 | Hide Last Online | Hide the "logged in X ago" stamp on cards | Off |
 | Confirm Delete | Confirmation dialog for deletions | On |
-| Import Handling | How to handle duplicate imports (Skip/Overwrite/Add Suffix) | Skip |
+| Import Handling | How to handle duplicate imports (Skip duplicates / Update existing / Add Suffix) | Skip |
 
 ## Installation
 
@@ -93,6 +93,18 @@ BSD 2-Clause License
 
 ## Changelog
 
+### v1.1.4
+- **Fix: switching RuneLite profiles no longer overwrites the other profile's roster.** Roster now reloads when RuneLite swaps in different account data, instead of saving its stale copy over it.
+- **Fix: manual order stays put.** Editing, logging in, or changing the badge of an account no longer moves it to the bottom of its category, and renaming, recoloring, or collapsing a category no longer moves it. New accounts and categories are added at the end, and so are imported ones.
+- **Fix: drag and drop lands where the indicator shows**, including when dragging downward within a category, while a search filter is active, and in grid view (which now shows a vertical indicator between tiles).
+- **Fix: the "+ Account" category list now includes categories created since the panel opened.**
+- **Fix: selecting a card no longer rebuilds the whole list in grid view, and the list keeps its scroll position** when you edit, drag, recolor, or change a badge.
+- **Fix: searching with no matches shows "No matching accounts"** instead of an empty Uncategorized header.
+- **Fix: "Add Account" from a collapsed category's menu** expands the category so the form is visible.
+- Hover highlighting stays on while the pointer is over a card's text; the online dot appears when the plugin is enabled while already logged in; the grid/list toggle follows the setting when it is changed from the config panel; the sort setting shows readable names in the config panel.
+- Category names can no longer be rendered as HTML in the category dropdown and the Move to Category dialog.
+- Internal: storage, drag-and-drop, and card code reorganized into smaller classes; 70 unit tests.
+
 ### v1.1.3
 - **Fix: cloud sync actually syncs now.** RuneLite's ConfigManager only serializes types that carry its `@ConfigSerializer` annotation; Roster's account data was being stored as a plain `toString()` and came back as an unreadable raw string, so every launch quietly fell back to the local `roster.json` and data never reached a second machine. Account data is now stored as explicit JSON. Existing installs self-heal automatically on the first launch after updating (the local file re-seeds the synced copy).
 - **Fix: dropping into Uncategorized.** The entire uncategorized area (header plus card list) is now a drop target, drops land exactly where the indicator shows, and accounts can be reordered within Uncategorized. Previously only the header registered drops and the card could land at an unpredictable position.
@@ -102,21 +114,21 @@ BSD 2-Clause License
 - Internal: performance sweep across the UI layer (no visible changes) and 34 new unit tests covering import/merge, drag renumbering, and search.
 
 ### v1.1.2
-- **Fix: mouse-wheel scroll on the panel.** RuneLite's `PluginPanel` default constructor wraps your content in its own `JScrollPane`. Combined with the panel's inner scroll pane this produced a dead scroll wheel everywhere except the narrow scrollbar strip itself — the inner viewport sized to the full content height and never needed to scroll, so wheel events landed on it as no-ops. Now passes `false` to `super()` so we own the scrolling end-to-end. Bonus: the search/+Account/+Category header and the footer (account count, mode buttons) now stay pinned while only the card list scrolls.
+- **Fix: mouse-wheel scroll on the panel.** RuneLite's `PluginPanel` default constructor wraps your content in its own `JScrollPane`. Combined with the panel's inner scroll pane this produced a dead scroll wheel everywhere except the narrow scrollbar strip itself: the inner viewport sized to the full content height and never needed to scroll, so wheel events landed on it as no-ops. Now passes `false` to `super()` so we own the scrolling end-to-end. Bonus: the search/+Account/+Category header and the footer (account count, mode buttons) now stay pinned while only the card list scrolls.
 - Plugin-hub preview GIF added to the README.
 
 ### v1.1.1
-- **Fix: account data loss on first v1.1 upgrade.** The migration in v1.1.0 renamed `roster.json` to a backup file after handing the data to ConfigManager. ConfigManager batches its writes, so if RuneLite was closed before its debounced flush hit disk, the in-memory data was lost — and the file backup had been renamed away. Migration is now **idempotent**: the file is never renamed, so a future ConfigManager loss can always re-seed from the same place. Recovery path checks `roster.json` → `roster.backup.json` → `roster.json.pre-v1.1.bak` so users who already hit the v1.1.0 bug get their data back automatically on the next launch.
-- **Account type icons** — replaced the letter-in-circle badges with the actual OSRS sprites: official chat badges for the six Ironman variants, an Abyssal whip for Main, the in-game Skills tab icon for Skiller, and a Granite maul for Pure.
+- **Fix: account data loss on first v1.1 upgrade.** The migration in v1.1.0 renamed `roster.json` to a backup file after handing the data to ConfigManager. ConfigManager batches its writes, so if RuneLite was closed before its debounced flush hit disk, the in-memory data was lost, and the file backup had been renamed away. Migration is now **idempotent**: the file is never renamed, so a future ConfigManager loss can always re-seed from the same place. Recovery path checks `roster.json` → `roster.backup.json` → `roster.json.pre-v1.1.bak` so users who already hit the v1.1.0 bug get their data back automatically on the next launch.
+- **Account type icons**: replaced the letter-in-circle badges with the actual OSRS sprites: official chat badges for the six Ironman variants, an Abyssal whip for Main, the in-game Skills tab icon for Skiller, and a Granite maul for Pure.
 - Badges are larger (16 → 20px in list view, 12 → 16px in grid view) for legibility.
 - More breathing room between display name and the type badge.
 - Footer menu labels tidied to match the per-account menu: "Import from Clipboard" / "Export to Clipboard".
 
 ### v1.1.0
-- **Cloud sync** — account data now persists through RuneLite's ConfigManager, so it travels with your RuneLite account across machines. Existing `roster.json` data is migrated automatically on first launch (original file preserved as `roster.json.pre-v1.1.bak`).
-- **Account type badges** — small clickable badge on each card shows whether the account is an Ironman variant, Skiller, Pure, etc. New accounts pick a type from a dropdown in the Add form; existing accounts can be changed by clicking the badge directly.
-- **Sort options** — new ⇵ button in the header lets you sort accounts by name, last online, or date added. Manual sort preserves your hand-arranged drag order.
-- **Last online tracking** — cards show "logged in X ago" for accounts that aren't currently online, auto-stamped when an account logs in on the current client.
+- **Cloud sync**: account data now persists through RuneLite's ConfigManager, so it travels with your RuneLite account across machines. Existing `roster.json` data is migrated automatically on first launch (original file preserved as `roster.json.pre-v1.1.bak`).
+- **Account type badges**: small clickable badge on each card shows whether the account is an Ironman variant, Skiller, Pure, etc. New accounts pick a type from a dropdown in the Add form; existing accounts can be changed by clicking the badge directly.
+- **Sort options**: new ⇵ button in the header lets you sort accounts by name, last online, or date added. Manual sort preserves your hand-arranged drag order.
+- **Last online tracking**: cards show "logged in X ago" for accounts that aren't currently online, auto-stamped when an account logs in on the current client.
 - New privacy toggle to hide the last-online stamp.
 
 ### v1.0.0

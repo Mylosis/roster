@@ -1,65 +1,38 @@
 package com.mylosis.roster.ui.dnd;
 
-import com.mylosis.roster.model.Account;
 import com.mylosis.roster.ui.AccountCardPanel;
 
-import javax.swing.*;
-import java.awt.Component;
-import java.awt.Container;
+import javax.swing.SwingUtilities;
 import java.awt.Point;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 
 /**
- * Mouse listener for dragging profiles between categories.
- * Attaches to a AccountCardPanel and all its children to ensure drag works from anywhere on the card.
- * Also handles click detection to trigger profile selection and edit.
+ * The single mouse handler for a card's clicks and drags, attached to the card
+ * and its non-interactive children so a drag can start anywhere on it.
+ * A click selects the account, a double-click opens the editor, and moving
+ * past {@link #DRAG_THRESHOLD} starts a drag.
  */
 public class AccountDragListener extends MouseAdapter
 {
+    private static final int DRAG_THRESHOLD = 10;
+    private static final int DOUBLE_CLICK_MS = 400;
+
+    // Double-click state is static and keyed by account id: the first click's
+    // selection refresh can replace the card before the second click arrives.
+    private static long lastClickTime = 0;
+    private static String lastClickAccountId = null;
+
     private final DragDropManager dragManager;
-    private final Account profile;
     private final AccountCardPanel card;
 
     private Point pressPoint = null;
-    private long pressTime = 0;
     private boolean dragStarted = false;
-    private static long lastClickTime = 0;
-    // Track the account by id, not by reference: a static Account would pin
-    // the object graph across panel rebuilds and plugin restarts, and rebuilds
-    // may replace the instance, silently breaking double-click detection.
-    private static String lastClickAccountId = null;
 
-    private static final int DRAG_THRESHOLD = 10;
-    private static final int CLICK_TIME_THRESHOLD = 300;
-    private static final int DOUBLE_CLICK_THRESHOLD = 400;
-
-    public AccountDragListener(DragDropManager dragManager, Account profile, AccountCardPanel card)
+    public AccountDragListener(DragDropManager dragManager, AccountCardPanel card)
     {
         this.dragManager = dragManager;
-        this.profile = profile;
         this.card = card;
-    }
-
-    /**
-     * Attach this listener to the card and all its children recursively.
-     */
-    public void attachToComponent(Component component)
-    {
-        component.addMouseListener(this);
-        component.addMouseMotionListener(this);
-
-        if (component instanceof Container)
-        {
-            for (Component child : ((Container) component).getComponents())
-            {
-                // Don't attach to buttons (let them handle their own clicks)
-                if (!(child instanceof JButton))
-                {
-                    attachToComponent(child);
-                }
-            }
-        }
     }
 
     @Override
@@ -68,7 +41,6 @@ public class AccountDragListener extends MouseAdapter
         if (e.getButton() == MouseEvent.BUTTON1 && !card.isExpanded())
         {
             pressPoint = e.getLocationOnScreen();
-            pressTime = System.currentTimeMillis();
             dragStarted = false;
         }
     }
@@ -80,46 +52,34 @@ public class AccountDragListener extends MouseAdapter
         {
             return;
         }
-
         if (dragStarted)
         {
             dragManager.endDrag(e.getLocationOnScreen());
         }
-        else if (pressPoint != null)
+        else if (pressPoint != null && !movedPastThreshold(e.getLocationOnScreen()))
         {
-            // This was a click, not a drag - handle it
-            long duration = System.currentTimeMillis() - pressTime;
-            Point current = e.getLocationOnScreen();
-            int dx = Math.abs(current.x - pressPoint.x);
-            int dy = Math.abs(current.y - pressPoint.y);
-
-            if (duration < CLICK_TIME_THRESHOLD && dx < DRAG_THRESHOLD && dy < DRAG_THRESHOLD)
-            {
-                // Check for double-click
-                long now = System.currentTimeMillis();
-                if (profile.getId() != null && profile.getId().equals(lastClickAccountId)
-                    && (now - lastClickTime) < DOUBLE_CLICK_THRESHOLD)
-                {
-                    // Double-click: expand card for inline editing
-                    SwingUtilities.invokeLater(() -> card.expand());
-                    lastClickTime = 0;
-                    lastClickAccountId = null;
-                }
-                else
-                {
-                    // Single-click: select profile (only if card not expanded)
-                    lastClickTime = now;
-                    lastClickAccountId = profile.getId();
-                    if (!card.isExpanded())
-                    {
-                        dragManager.getPlugin().selectAccount(profile);
-                    }
-                }
-            }
+            onClick();
         }
-
         pressPoint = null;
         dragStarted = false;
+    }
+
+    private void onClick()
+    {
+        String id = card.getAccount().getId();
+        long now = System.currentTimeMillis();
+        if (id.equals(lastClickAccountId) && now - lastClickTime < DOUBLE_CLICK_MS)
+        {
+            lastClickTime = 0;
+            lastClickAccountId = null;
+            SwingUtilities.invokeLater(card::expand);
+        }
+        else
+        {
+            lastClickTime = now;
+            lastClickAccountId = id;
+            card.select();
+        }
     }
 
     @Override
@@ -128,22 +88,20 @@ public class AccountDragListener extends MouseAdapter
         if (pressPoint == null) return;
 
         Point current = e.getLocationOnScreen();
-
-        if (!dragStarted)
+        if (!dragStarted && movedPastThreshold(current))
         {
-            int dx = Math.abs(current.x - pressPoint.x);
-            int dy = Math.abs(current.y - pressPoint.y);
-
-            if (dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD)
-            {
-                dragStarted = true;
-                dragManager.startProfileDrag(profile, card, pressPoint);
-            }
+            dragStarted = true;
+            dragManager.startAccountDrag(card.getAccount(), card, pressPoint);
         }
-
         if (dragStarted)
         {
             dragManager.updateDrag(current);
         }
+    }
+
+    private boolean movedPastThreshold(Point current)
+    {
+        return Math.abs(current.x - pressPoint.x) > DRAG_THRESHOLD
+            || Math.abs(current.y - pressPoint.y) > DRAG_THRESHOLD;
     }
 }

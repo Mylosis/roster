@@ -2,167 +2,137 @@ package com.mylosis.roster.ui;
 
 import com.mylosis.roster.RosterConfig;
 import com.mylosis.roster.RosterPlugin;
-import com.mylosis.roster.storage.AccountStorage;
+import com.mylosis.roster.model.Account;
 import com.mylosis.roster.ui.components.NotificationToast;
 import com.mylosis.roster.ui.components.Theme;
 import com.mylosis.roster.ui.dnd.DragDropManager;
 import com.mylosis.roster.ui.dnd.DragOverlay;
+import com.mylosis.roster.ui.dnd.ListLayout;
+import lombok.AccessLevel;
 import lombok.Getter;
-import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.ui.PluginPanel;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Main panel for the Roster plugin.
- * Orchestrates header, form, profile list, footer, and notification components.
+ * Main panel for the Roster plugin. Owns the header, forms, card list,
+ * footer, and notifications, and rebuilds or refreshes the list on demand.
+ * EDT only.
  */
-@Slf4j
 public class RosterPanel extends PluginPanel
 {
-    private final RosterPlugin plugin;
-    private final AccountStorage storage;
+    private static final int NOTIFICATION_DURATION_MS = 3000;
 
-    @Getter
+    private final RosterPlugin plugin;
     private final DragDropManager dragDropManager;
     private final AccountListBuilder listBuilder;
-    @Getter
+    @Getter(AccessLevel.PACKAGE)
     private final PanelFormManager formManager;
+    private final PanelFooterBuilder footer;
 
-    private JPanel profileListPanel;
-    private JScrollPane scrollPane;
+    private final JScrollPane scrollPane;
     private final JLayeredPane layeredPane;
-    private final DragOverlay dragOverlay;
-    private JPanel notificationPanel;
-    private JLabel accountCountLabel;
+    private final JPanel notificationPanel;
+    private final JLabel accountCountLabel = new JLabel();
 
     private String searchFilter = "";
-
-    @Setter
-    private AccountCardPanel expandedCard = null;
+    private AccountCardPanel expandedCard;
 
     /**
-     * Live id→card lookup populated during each rebuild. Lets callers like
-     * {@link #refreshCard(String)} update a single visible card in place instead
-     * of forcing a full panel rebuild for trivial state changes (selection
-     * highlight, last-online timestamp). Stale entries (e.g. a deleted account)
-     * naturally drop out on the next rebuild; missing entries fall back to a
-     * full rebuild via {@link #refreshAccount(String)}.
+     * Live id -> card lookup, repopulated on every rebuild, so small state
+     * changes (selection, online status, badge) refresh one card in place.
      */
     private final Map<String, AccountCardPanel> cardsByAccountId = new HashMap<>();
+    /** Drop zones of the current list, for drag and drop. */
+    @Getter
+    private ListLayout listLayout;
 
     public RosterPanel(RosterPlugin plugin)
     {
-        // Disable PluginPanel's default outer JScrollPane wrap — we manage our own
-        // scrolling via the inner scrollPane built in buildContentPanel(). With the
-        // outer wrap in place wheel events were swallowed by the inner viewport
-        // (which never needed to scroll, since it sized to its content), leaving
-        // the user with a dead scroll wheel.
+        // No PluginPanel scroll wrapper: the card list has its own scroll pane,
+        // and a second one swallowed mouse-wheel events.
         super(false);
         this.plugin = plugin;
-        this.storage = plugin.getAccountStorage();
         this.dragDropManager = new DragDropManager(plugin, this);
-        this.dragOverlay = dragDropManager.getOverlay();
         this.listBuilder = new AccountListBuilder(plugin, this, dragDropManager);
-        this.formManager = new PanelFormManager(plugin, this::rebuild, this::doRevalidate);
+        this.formManager = new PanelFormManager(plugin.getAccountStorage(), this::rebuild, this::revalidateAndRepaint);
+        this.footer = new PanelFooterBuilder(plugin, this, this::showNotification, this::rebuild);
 
         setLayout(new BorderLayout());
         setBackground(Theme.BACKGROUND);
 
+        scrollPane = createScrollPane();
+        notificationPanel = createNotificationPanel();
+
         layeredPane = new JLayeredPane();
         layeredPane.setLayout(new OverlayLayout(layeredPane));
-
-        JPanel contentPanel = buildContentPanel();
-        layeredPane.add(contentPanel, JLayeredPane.DEFAULT_LAYER);
-
-        notificationPanel = buildNotificationPanel();
+        layeredPane.add(createContentPanel(), JLayeredPane.DEFAULT_LAYER);
         layeredPane.add(notificationPanel, JLayeredPane.POPUP_LAYER);
-
-        layeredPane.addComponentListener(new java.awt.event.ComponentAdapter()
+        DragOverlay dragOverlay = dragDropManager.getOverlay();
+        dragOverlay.setVisible(false);
+        layeredPane.add(dragOverlay, JLayeredPane.DRAG_LAYER);
+        layeredPane.addComponentListener(new ComponentAdapter()
         {
             @Override
-            public void componentResized(java.awt.event.ComponentEvent e)
+            public void componentResized(ComponentEvent e)
             {
                 repositionNotificationPanel();
             }
         });
 
-        dragOverlay.setVisible(false);
-        layeredPane.add(dragOverlay, JLayeredPane.DRAG_LAYER);
-
         add(layeredPane, BorderLayout.CENTER);
         rebuild();
     }
 
-    private JPanel buildContentPanel()
+    private JPanel createContentPanel()
     {
         JPanel contentPanel = new JPanel(new BorderLayout());
         contentPanel.setBackground(Theme.BACKGROUND);
         contentPanel.setBorder(new EmptyBorder(Theme.SPACING_MD, Theme.SPACING_SM, Theme.SPACING_SM, Theme.SPACING_SM));
 
-        // Header with search and action buttons
-        PanelHeaderBuilder headerBuilder = new PanelHeaderBuilder();
-        JPanel headerPanel = headerBuilder.build(
-            filter -> {
-                // The debounce can fire with unchanged text (type then delete
-                // within the window) — don't pay a full rebuild for a no-op.
-                if (!filter.equals(searchFilter))
-                {
-                    searchFilter = filter;
-                    rebuild();
-                }
-            },
-            () -> formManager.toggleAddProfileForm(this::collapseExpandedCardOnly),
+        JPanel header = PanelHeaderBuilder.build(
+            this::onSearchChanged,
+            () -> formManager.toggleAddAccountForm(this::collapseExpandedCardOnly),
             () -> formManager.toggleAddCategoryForm(this::collapseExpandedCardOnly),
             () -> plugin.getConfig().sortKey(),
-            newKey -> {
-                plugin.getConfigManager().setConfiguration(
-                    RosterConfig.CONFIG_GROUP, "sortKey", newKey);
-                // onConfigChanged will trigger the rebuild
-            }
-        );
+            // Written to config; onConfigChanged triggers the rebuild.
+            key -> plugin.getConfigManager().setConfiguration(RosterConfig.CONFIG_GROUP, "sortKey", key));
 
-        // Attach form panels below action buttons
         JPanel headerWithForms = new JPanel();
         headerWithForms.setLayout(new BoxLayout(headerWithForms, BoxLayout.Y_AXIS));
         headerWithForms.setBackground(Theme.BACKGROUND);
-        headerWithForms.add(headerPanel);
-        headerWithForms.add(formManager.getAddProfileFormPanel());
+        headerWithForms.add(header);
+        headerWithForms.add(formManager.getAddAccountFormPanel());
         headerWithForms.add(formManager.getAddCategoryFormPanel());
-
         contentPanel.add(headerWithForms, BorderLayout.NORTH);
 
-        // Scrollable profile list
-        profileListPanel = new JPanel();
-        profileListPanel.setLayout(new BoxLayout(profileListPanel, BoxLayout.Y_AXIS));
-        profileListPanel.setBackground(Theme.BACKGROUND);
-
-        scrollPane = new JScrollPane(profileListPanel);
-        scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-        scrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
-        scrollPane.setBorder(null);
-        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
-        scrollPane.setBackground(Theme.BACKGROUND);
-        scrollPane.getViewport().setBackground(Theme.BACKGROUND);
         contentPanel.add(scrollPane, BorderLayout.CENTER);
 
-        // Footer with count and actions
-        accountCountLabel = new JLabel("0 Accounts");
         accountCountLabel.setForeground(Theme.TEXT_SECONDARY);
         accountCountLabel.setFont(Theme.fontRegular(accountCountLabel.getFont(), Theme.FONT_SIZE_SMALL));
-
-        PanelFooterBuilder footerBuilder = new PanelFooterBuilder(plugin, this::showNotification, this::rebuild);
-        contentPanel.add(footerBuilder.build(accountCountLabel), BorderLayout.SOUTH);
-
+        contentPanel.add(footer.build(accountCountLabel), BorderLayout.SOUTH);
         return contentPanel;
     }
 
-    private JPanel buildNotificationPanel()
+    private static JScrollPane createScrollPane()
+    {
+        JScrollPane pane = new JScrollPane();
+        pane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        pane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
+        pane.setBorder(null);
+        pane.getVerticalScrollBar().setUnitIncrement(16);
+        pane.setBackground(Theme.BACKGROUND);
+        pane.getViewport().setBackground(Theme.BACKGROUND);
+        return pane;
+    }
+
+    private static JPanel createNotificationPanel()
     {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0))
         {
@@ -179,72 +149,108 @@ public class RosterPanel extends PluginPanel
         return panel;
     }
 
-    public void rebuild()
+    private void onSearchChanged(String filter)
     {
-        // Create a fresh panel to avoid stale layout caches from BoxLayout
-        JPanel newListPanel = new JPanel();
-        newListPanel.setLayout(new BoxLayout(newListPanel, BoxLayout.Y_AXIS));
-        newListPanel.setBackground(Theme.BACKGROUND);
-
-        // Clear the card index — the rebuild below will repopulate it as each
-        // AccountCardPanel is created. Old card references are dropped here so
-        // they can be GC'd along with the discarded list panel.
-        cardsByAccountId.clear();
-
-        int[] counts = listBuilder.rebuild(newListPanel, searchFilter);
-        updateProfileCount(counts[0], counts[1]);
-
-        // Swap the viewport to the fresh panel — forces complete layout recalculation
-        profileListPanel = newListPanel;
-        scrollPane.setViewportView(profileListPanel);
-        scrollPane.getVerticalScrollBar().setValue(0);
-
-        // Scope the revalidate to the scrollpane subtree. The previous version
-        // walked all the way to the root window — overkill for a sidebar redraw,
-        // and on Windows it visibly flickered other RuneLite panels. Validating
-        // the viewport then the scrollpane is enough: the viewport view changed,
-        // and the scrollpane is the boundary of layout invalidation for our panel.
-        scrollPane.getViewport().revalidate();
-        scrollPane.revalidate();
-        scrollPane.repaint();
-    }
-
-    private void updateProfileCount(int filtered, int total)
-    {
-        if (filtered == total)
+        // The debounce can fire with unchanged text (typed then deleted).
+        if (!filter.equals(searchFilter))
         {
-            accountCountLabel.setText(total + " Account" + (total != 1 ? "s" : ""));
-        }
-        else
-        {
-            accountCountLabel.setText(filtered + " / " + total + " Accounts");
+            searchFilter = filter;
+            rebuild();
+            // A new result set starts at the top.
+            scrollPane.getVerticalScrollBar().setValue(0);
         }
     }
 
     /**
-     * Collapse any currently expanded profile card and hide add form.
+     * Rebuilds the card list from storage, keeping the scroll position.
      */
-    public void collapseExpandedCard()
+    public void rebuild()
+    {
+        int scrollValue = scrollPane.getVerticalScrollBar().getValue();
+
+        // A fresh list panel avoids stale BoxLayout caches; the old cards,
+        // including any open editor, are discarded with it.
+        JPanel list = new ListPanel();
+        list.setLayout(new BoxLayout(list, BoxLayout.Y_AXIS));
+        list.setBackground(Theme.BACKGROUND);
+        cardsByAccountId.clear();
+        expandedCard = null;
+        listLayout = new ListLayout(plugin.getConfig().gridView());
+
+        AccountListBuilder.Counts counts = listBuilder.build(list, searchFilter, listLayout);
+        updateAccountCount(counts.getVisible(), counts.getTotal());
+        footer.refresh();
+
+        scrollPane.setViewportView(list);
+        // Lay out now so the restored position is clamped against the new height.
+        scrollPane.validate();
+        scrollPane.getVerticalScrollBar().setValue(scrollValue);
+        scrollPane.repaint();
+    }
+
+    private void updateAccountCount(int visible, int total)
+    {
+        accountCountLabel.setText(visible == total
+            ? total + " Account" + (total != 1 ? "s" : "")
+            : visible + " / " + total + " Accounts");
+    }
+
+    /**
+     * Refreshes one card's transient state (selection, online status, badge)
+     * in place. Falls back to a full rebuild when the card isn't shown, unless
+     * it is only hidden by the search filter (a rebuild would change nothing).
+     */
+    public void refreshAccount(String accountId)
+    {
+        AccountCardPanel card = cardsByAccountId.get(accountId);
+        if (card != null)
+        {
+            card.refreshDynamicState();
+            return;
+        }
+        if (!searchFilter.isEmpty())
+        {
+            Account account = plugin.getAccountStorage().getAccount(accountId);
+            if (account != null && !account.getSearchHaystack().contains(searchFilter))
+            {
+                return;
+            }
+        }
+        rebuild();
+    }
+
+    /** Called by the list builders as each card is created. */
+    void registerCard(String accountId, AccountCardPanel card)
+    {
+        cardsByAccountId.put(accountId, card);
+    }
+
+    void setExpandedCard(AccountCardPanel card)
+    {
+        expandedCard = card;
+    }
+
+    /** Collapses the card being edited, if any, and hides the add-account form. */
+    void collapseExpandedCard()
     {
         collapseExpandedCardOnly();
-        formManager.hideAddForm();
+        formManager.hideAddAccountForm();
     }
 
     private void collapseExpandedCardOnly()
     {
         if (expandedCard != null)
         {
-            expandedCard.collapse();
+            AccountCardPanel card = expandedCard;
             expandedCard = null;
+            card.collapse();
         }
     }
 
     public void showNotification(String message, NotificationToast.Type type)
     {
-        NotificationToast toast = new NotificationToast(message, type, 3000);
-        // Stop the previous toast's fade/dismiss timers before discarding it —
-        // removeAll() alone leaves them firing 16ms repaints against a
-        // parentless component for up to ~3.5s.
+        // Stop the replaced toast's timers, or they keep repainting a
+        // parentless component until they finish.
         for (Component c : notificationPanel.getComponents())
         {
             if (c instanceof NotificationToast)
@@ -253,7 +259,7 @@ public class RosterPanel extends PluginPanel
             }
         }
         notificationPanel.removeAll();
-        notificationPanel.add(toast);
+        notificationPanel.add(new NotificationToast(message, type, NOTIFICATION_DURATION_MS));
         notificationPanel.revalidate();
         SwingUtilities.invokeLater(this::repositionNotificationPanel);
     }
@@ -266,64 +272,58 @@ public class RosterPanel extends PluginPanel
             return;
         }
 
-        int panelWidth = layeredPane.getWidth();
-        int panelHeight = layeredPane.getHeight();
-        notificationPanel.setSize(panelWidth, 100);
+        int width = layeredPane.getWidth();
+        notificationPanel.setSize(width, 100);
         notificationPanel.doLayout();
         Dimension pref = notificationPanel.getPreferredSize();
-        int y = panelHeight - pref.height - 50;
-        notificationPanel.setBounds(0, y, panelWidth, pref.height + 20);
+        int y = layeredPane.getHeight() - pref.height - 50;
+        notificationPanel.setBounds(0, y, width, pref.height + 20);
         notificationPanel.repaint();
     }
 
-    private void doRevalidate()
+    private void revalidateAndRepaint()
     {
         revalidate();
         repaint();
     }
 
     /**
-     * Called by {@link AccountListBuilder} and {@link CategoryPanel} as each card is
-     * inserted into the rebuilt list. Should not be called from elsewhere.
+     * The scrolled card list. Always exactly as wide as the viewport: without
+     * this, one over-wide row (a long category name) widened the whole list and
+     * pushed every card's buttons out of view, since horizontal scrolling is off.
      */
-    public void registerCard(String accountId, AccountCardPanel card)
+    private static final class ListPanel extends JPanel implements Scrollable
     {
-        if (accountId != null && card != null)
-        {
-            cardsByAccountId.put(accountId, card);
-        }
-    }
+        private static final int SCROLL_UNIT = 16;
 
-    /**
-     * Refreshes a single card's mutable visual state (selected-highlight, online
-     * indicator, last-online label) without rebuilding the panel. Falls back to a
-     * full {@link #rebuild()} if the card isn't in the live index — e.g. because
-     * it's currently filtered out by search, or the account was deleted.
-     */
-    public void refreshAccount(String accountId)
-    {
-        if (accountId == null)
+        @Override
+        public Dimension getPreferredScrollableViewportSize()
         {
-            return;
+            return getPreferredSize();
         }
-        AccountCardPanel card = cardsByAccountId.get(accountId);
-        if (card == null)
+
+        @Override
+        public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction)
         {
-            // Not visible. If the account exists but is merely filtered out by
-            // the active search, a rebuild would produce the identical view —
-            // skip it (login/logout events during a search hit this path).
-            if (!searchFilter.isEmpty())
-            {
-                com.mylosis.roster.model.Account account = storage.getProfile(accountId);
-                if (account != null && !account.getSearchHaystack().contains(searchFilter))
-                {
-                    return;
-                }
-            }
-            // Genuinely unknown card — full rebuild is the safe fallback.
-            rebuild();
-            return;
+            return SCROLL_UNIT;
         }
-        card.refreshDynamicState();
+
+        @Override
+        public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction)
+        {
+            return orientation == SwingConstants.VERTICAL ? visibleRect.height : visibleRect.width;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth()
+        {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight()
+        {
+            return false;
+        }
     }
 }

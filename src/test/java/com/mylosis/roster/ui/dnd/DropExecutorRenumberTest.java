@@ -5,10 +5,12 @@ import com.mylosis.roster.model.AccountMetadata;
 import org.junit.Test;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 public class DropExecutorRenumberTest
@@ -109,27 +111,62 @@ public class DropExecutorRenumberTest
     }
 
     @Test
-    public void siblingWithNullMetadataIsSkippedButOthersStillNumberedByPosition()
+    public void siblingWithNullMetadataGetsMetadataAndIsRenumbered()
     {
         List<Account> siblings = new ArrayList<>();
         siblings.add(accountWithOrder("a", 0));
-        // No metadata: excluded from the returned "changed" list, but still
-        // occupies a slot in the combined ordering, so later positions shift.
         Account noMeta = Account.builder().id("noMeta").build();
         siblings.add(noMeta);
-        siblings.add(accountWithOrder("b", 1));
         Account moved = accountWithOrder("moved", 99);
 
-        List<Account> changed = DropExecutor.renumberWithInsert(siblings, moved, 3);
+        List<Account> changed = DropExecutor.renumberWithInsert(siblings, moved, 2);
 
-        assertFalse(changed.stream().anyMatch(a -> a.getId().equals("noMeta")));
         assertEquals(3, changed.size());
-        // Order in siblings is [a, noMeta, b], moved inserted at index 3 -> [a, noMeta, b, moved]
-        assertEquals("a", changed.get(0).getId());
-        assertEquals(0, changed.get(0).getMetadata().getSortOrder());
-        assertEquals("b", changed.get(1).getId());
-        assertEquals(2, changed.get(1).getMetadata().getSortOrder());
-        assertEquals("moved", changed.get(2).getId());
-        assertEquals(3, changed.get(2).getMetadata().getSortOrder());
+        assertNotNull(noMeta.getMetadata());
+        assertEquals(1, noMeta.getMetadata().getSortOrder());
+        assertEquals(2, moved.getMetadata().getSortOrder());
+    }
+
+    // resolveInsertIndex: visible neighbours -> index in the stored order
+
+    @Test
+    public void insertsInFrontOfBeforeNeighbour()
+    {
+        assertEquals(1, DropExecutor.resolveInsertIndex(Arrays.asList("a", "b", "c"), "b", "a"));
+    }
+
+    @Test
+    public void fallsBackToAfterNeighbourAtTheEnd()
+    {
+        assertEquals(3, DropExecutor.resolveInsertIndex(Arrays.asList("a", "b", "c"), null, "c"));
+    }
+
+    @Test
+    public void emptyTargetAppends()
+    {
+        assertEquals(0, DropExecutor.resolveInsertIndex(Collections.emptyList(), null, null));
+    }
+
+    @Test
+    public void downwardMoveInSameCategoryLandsBetweenTheNeighbours()
+    {
+        // Stored [A, B, C]; A dragged to between B and C. The visible
+        // neighbours are B (after) and C (before); siblings exclude A.
+        int index = DropExecutor.resolveInsertIndex(Arrays.asList("b", "c"), "c", "b");
+        List<Account> changed = DropExecutor.renumberWithInsert(
+            new ArrayList<>(Arrays.asList(accountWithOrder("b", 1), accountWithOrder("c", 2))),
+            accountWithOrder("a", 0), index);
+
+        assertEquals("b", changed.get(0).getId());
+        assertEquals("a", changed.get(1).getId());
+        assertEquals("c", changed.get(2).getId());
+    }
+
+    @Test
+    public void neighboursHiddenBySearchStillResolveAgainstStoredOrder()
+    {
+        // Stored [a, x, b] with x filtered out of view; dropping between the
+        // visible a and b lands in front of b in the stored order.
+        assertEquals(2, DropExecutor.resolveInsertIndex(Arrays.asList("a", "x", "b"), "b", "a"));
     }
 }

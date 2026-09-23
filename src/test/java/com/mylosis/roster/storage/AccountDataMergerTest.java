@@ -2,6 +2,7 @@ package com.mylosis.roster.storage;
 
 import com.mylosis.roster.model.Account;
 import com.mylosis.roster.model.AccountData;
+import com.mylosis.roster.model.AccountMetadata;
 import com.mylosis.roster.model.ImportDuplicateMode;
 import com.mylosis.roster.model.ProfileGroup;
 import org.junit.Test;
@@ -172,5 +173,62 @@ public class AccountDataMergerTest
         assertEquals(1, stats.getGroupsAdded());
         assertEquals(1, stats.getGroupsSkipped());
         assertEquals(2, existing.getGroups().size());
+    }
+
+    private static Account ordered(String id, String username, String groupId, int sortOrder)
+    {
+        Account account = account(id, username, null);
+        account.setGroupId(groupId);
+        account.setMetadata(AccountMetadata.builder().sortOrder(sortOrder).build());
+        return account;
+    }
+
+    @Test
+    public void importedAccountsAppendAfterExistingOnesInTheirOwnOrder()
+    {
+        AccountData existing = dataWith(ordered("e0", "a", null, 0), ordered("e1", "b", null, 1));
+        // Exported in list order [i1, i0] but sortOrder says i0 comes first.
+        AccountData importData = dataWith(ordered("i1", "d", null, 1), ordered("i0", "c", null, 0));
+
+        new AccountDataMerger().merge(existing, importData, ImportDuplicateMode.SKIP);
+
+        assertEquals(2, existing.findAccountById("i0").getMetadata().getSortOrder());
+        assertEquals(3, existing.findAccountById("i1").getMetadata().getSortOrder());
+    }
+
+    @Test
+    public void importedCategoriesAppendAfterExistingOnes()
+    {
+        AccountData existing = AccountData.createEmpty();
+        existing.addGroup(ProfileGroup.builder().id("g0").sortOrder(0).build());
+        AccountData importData = AccountData.createEmpty();
+        importData.addGroup(ProfileGroup.builder().id("g1").sortOrder(0).build());
+
+        new AccountDataMerger().merge(existing, importData, ImportDuplicateMode.SKIP);
+
+        assertEquals(1, existing.findGroupById("g1").getSortOrder());
+    }
+
+    @Test
+    public void updateKeepsTheExistingPositionAndListSlot()
+    {
+        AccountData existing = dataWith(ordered("e0", "a", null, 0), ordered("e1", "b", null, 1));
+        AccountData importData = dataWith(ordered("e0", "a", null, 9));
+
+        new AccountDataMerger().merge(existing, importData, ImportDuplicateMode.UPDATE);
+
+        assertEquals("e0", existing.getAccounts().get(0).getId());
+        assertEquals(0, existing.findAccountById("e0").getMetadata().getSortOrder());
+    }
+
+    @Test
+    public void detailedMessageSummarizesTheImport()
+    {
+        ImportResult result = ImportResult.success(new ImportStats(2, 3, 1, 1, 0));
+
+        assertEquals("Added 2, updated 1, skipped 3 duplicates, 1 category", result.getDetailedMessage());
+        assertTrue(result.hasChanges());
+        assertEquals("All accounts already exist",
+            ImportResult.success(new ImportStats(0, 0, 0, 0, 1)).getDetailedMessage());
     }
 }

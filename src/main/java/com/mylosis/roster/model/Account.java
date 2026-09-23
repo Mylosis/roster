@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import java.util.Locale;
 import java.util.UUID;
 
 @Data
@@ -23,15 +24,14 @@ public class Account
      * logged in (matched by display name, or linked via the login-screen card
      * selection). Nullable for accounts never observed online. Online detection
      * and last-online stamping prefer this over the alias, so renaming the
-     * alias no longer breaks them. Added in v1.2; Gson-backwards-compatible.
+     * alias no longer breaks them. Added in v1.1.3; Gson-backwards-compatible.
      */
     private String characterName;
 
     /**
      * Lazy lowercase concatenation of the fields the search UI matches against
-     * (alias, username, notes). Built once on first search hit, dropped whenever
-     * one of those fields mutates. Avoids the 3× toLowerCase + 3× null-check per
-     * card per keystroke that the previous filterProfiles() did.
+     * (alias, username, character name, notes). Built once on first search hit,
+     * dropped whenever one of those fields mutates.
      */
     private transient String searchHaystackCache;
 
@@ -51,6 +51,27 @@ public class Account
     }
 
     /**
+     * Returns this account's metadata, attaching a default instance first when
+     * it has none (legacy or hand-edited data).
+     */
+    public AccountMetadata ensureMetadata()
+    {
+        if (metadata == null)
+        {
+            setMetadata(AccountMetadata.createDefault());
+        }
+        return metadata;
+    }
+
+    /** The account type, or {@link AccountType#MAIN} when none is recorded. */
+    public AccountType resolveAccountType()
+    {
+        return metadata != null && metadata.getAccountType() != null
+            ? metadata.getAccountType()
+            : AccountType.MAIN;
+    }
+
+    /**
      * Returns a lowercase blob containing alias + username + character name +
      * notes, suitable for substring search. Cached until
      * {@link #invalidateSearchHaystack()} is called.
@@ -60,10 +81,10 @@ public class Account
         String cached = searchHaystackCache;
         if (cached != null) return cached;
         StringBuilder sb = new StringBuilder(64);
-        if (alias != null) sb.append(alias.toLowerCase()).append('\n');
-        if (username != null) sb.append(username.toLowerCase()).append('\n');
-        if (characterName != null) sb.append(characterName.toLowerCase()).append('\n');
-        if (metadata != null && metadata.getNotes() != null) sb.append(metadata.getNotes().toLowerCase());
+        if (alias != null) sb.append(alias.toLowerCase(Locale.ROOT)).append('\n');
+        if (username != null) sb.append(username.toLowerCase(Locale.ROOT)).append('\n');
+        if (characterName != null) sb.append(characterName.toLowerCase(Locale.ROOT)).append('\n');
+        if (metadata != null && metadata.getNotes() != null) sb.append(metadata.getNotes().toLowerCase(Locale.ROOT));
         cached = sb.toString();
         searchHaystackCache = cached;
         return cached;
@@ -75,7 +96,7 @@ public class Account
     }
 
     // Lombok @Data generates setAlias/setUsername; mutations need to invalidate
-    // the search cache. Explicit overrides here are simpler than @Setter(onMethod_=…).
+    // the search cache. Explicit overrides here are simpler than @Setter(onMethod_=...).
     public void setAlias(String alias) { this.alias = alias; invalidateSearchHaystack(); }
     public void setUsername(String username) { this.username = username; invalidateSearchHaystack(); }
     public void setCharacterName(String characterName) { this.characterName = characterName; invalidateSearchHaystack(); }

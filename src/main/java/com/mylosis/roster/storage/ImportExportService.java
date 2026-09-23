@@ -1,13 +1,13 @@
 package com.mylosis.roster.storage;
 
 import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import com.google.gson.JsonSyntaxException;
-import com.mylosis.roster.model.ImportDuplicateMode;
 import com.mylosis.roster.model.Account;
 import com.mylosis.roster.model.AccountData;
 import com.mylosis.roster.model.AccountMetadata;
 import com.mylosis.roster.model.AccountType;
+import com.mylosis.roster.model.ImportDuplicateMode;
+import com.mylosis.roster.model.ProfileGroup;
 import lombok.extern.slf4j.Slf4j;
 
 import javax.inject.Inject;
@@ -16,20 +16,20 @@ import java.awt.Toolkit;
 import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.IOException;
-import java.io.Writer;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
+import java.awt.datatransfer.Transferable;
+import java.util.ArrayList;
+import java.util.Collections;
 
+/**
+ * Clipboard import and export of the roster as pretty-printed JSON.
+ */
 @Slf4j
 @Singleton
 public class ImportExportService
 {
     /**
      * Upper bound on accepted import JSON. Anything this size is not a roster
-     * (2 MB is thousands of accounts) — without the cap, an oversized clipboard
+     * (2 MB is thousands of accounts); without the cap, an oversized clipboard
      * blob gets parsed, stored, and pushed through ConfigManager's cloud sync
      * on every subsequent save.
      */
@@ -47,63 +47,74 @@ public class ImportExportService
             .create();
     }
 
+    /** Copies the whole roster to the clipboard. */
     public ExportResult exportToClipboard()
+    {
+        AccountData data = accountStorage.exportSnapshot();
+        return export(data, data.getAccounts().size(), data.getGroups().size());
+    }
+
+    /**
+     * Copies one account to the clipboard, wrapped in the same envelope as a
+     * full export so either can be imported the same way.
+     */
+    public ExportResult exportAccountToClipboard(Account account)
+    {
+        AccountData wrapper = AccountData.builder()
+            .version(AccountData.CURRENT_VERSION)
+            .accounts(Collections.singletonList(account))
+            .groups(new ArrayList<>())
+            .build();
+        return export(wrapper, 1, 0);
+    }
+
+    private ExportResult export(AccountData data, int accountCount, int groupCount)
     {
         try
         {
-            AccountData exportData = accountStorage.getExportData();
-            String json = gson.toJson(exportData);
-
-            Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-            clipboard.setContents(new StringSelection(json), null);
-
-            int accountCount = exportData.getAccounts() != null ? exportData.getAccounts().size() : 0;
-            int groupCount = exportData.getGroups() != null ? exportData.getGroups().size() : 0;
-
-            log.info("Exported {} accounts and {} categories to clipboard", accountCount, groupCount);
-            return new ExportResult(true, accountCount, groupCount, null);
+            copyToClipboard(gson.toJson(data));
+            log.debug("Exported {} accounts and {} categories to clipboard", accountCount, groupCount);
+            return ExportResult.success(accountCount, groupCount);
         }
         catch (Exception e)
         {
             log.error("Failed to export to clipboard", e);
-            return new ExportResult(false, 0, 0, "Failed to copy to clipboard: " + e.getMessage());
+            return ExportResult.failure("Failed to copy to clipboard: " + e.getMessage());
         }
     }
 
-    public ImportResult importFromClipboard(boolean replace)
+    /** Puts plain text on the system clipboard. */
+    public void copyToClipboard(String text)
     {
-        return importFromClipboard(replace, ImportDuplicateMode.ADD_WITH_SUFFIX);
+        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
     }
 
-    public ImportResult importFromClipboard(boolean replace, ImportDuplicateMode duplicateMode)
+    public ImportResult importFromClipboard(ImportDuplicateMode duplicateMode)
     {
         try
         {
             Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-
-            if (!clipboard.isDataFlavorAvailable(DataFlavor.stringFlavor))
+            Transferable contents = clipboard.getContents(null);
+            if (contents == null || !contents.isDataFlavorSupported(DataFlavor.stringFlavor))
             {
                 return ImportResult.failure("Clipboard doesn't contain text");
             }
 
-            String json = (String) clipboard.getContents(null).getTransferData(DataFlavor.stringFlavor);
+            String json = (String) contents.getTransferData(DataFlavor.stringFlavor);
             if (json == null || json.trim().isEmpty())
             {
                 return ImportResult.failure("Clipboard is empty");
             }
-
-            log.debug("Clipboard content length: {} chars", json.length());
-
             if (json.length() > MAX_IMPORT_CHARS)
             {
                 return ImportResult.failure("Clipboard data too large to be account data");
             }
 
-            return importFromJson(json, replace, duplicateMode);
+            return importFromJson(json, duplicateMode);
         }
         catch (JsonSyntaxException e)
         {
-            log.error("Invalid JSON format in clipboard", e);
+            log.warn("Invalid JSON format in clipboard", e);
             return ImportResult.failure("Clipboard doesn't contain valid account data");
         }
         catch (Exception e)
@@ -113,58 +124,7 @@ public class ImportExportService
         }
     }
 
-    public ExportResult exportToFile(File file)
-    {
-        try
-        {
-            AccountData exportData = accountStorage.getExportData();
-            try (Writer writer = Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8))
-            {
-                gson.toJson(exportData, writer);
-            }
-
-            int accountCount = exportData.getAccounts() != null ? exportData.getAccounts().size() : 0;
-            int groupCount = exportData.getGroups() != null ? exportData.getGroups().size() : 0;
-
-            log.info("Exported {} accounts and {} groups to {}", accountCount, groupCount, file.getAbsolutePath());
-            return new ExportResult(true, accountCount, groupCount, null);
-        }
-        catch (IOException e)
-        {
-            log.error("Failed to export accounts", e);
-            return new ExportResult(false, 0, 0, "Failed to write file: " + e.getMessage());
-        }
-    }
-
-    public ImportResult importFromFile(File file, boolean replace)
-    {
-        return importFromFile(file, replace, ImportDuplicateMode.ADD_WITH_SUFFIX);
-    }
-
-    public ImportResult importFromFile(File file, boolean replace, ImportDuplicateMode duplicateMode)
-    {
-        try (BufferedReader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8))
-        {
-            AccountData importData = gson.fromJson(reader, AccountData.class);
-            if (importData == null)
-            {
-                return ImportResult.failure("Invalid or empty file");
-            }
-            return doImport(importData, replace, duplicateMode);
-        }
-        catch (JsonSyntaxException e)
-        {
-            log.error("Invalid JSON format in import file", e);
-            return ImportResult.failure("Invalid JSON format");
-        }
-        catch (IOException e)
-        {
-            log.error("Failed to import accounts", e);
-            return ImportResult.failure("Failed to read file: " + e.getMessage());
-        }
-    }
-
-    private ImportResult importFromJson(String json, boolean replace, ImportDuplicateMode duplicateMode)
+    private ImportResult importFromJson(String json, ImportDuplicateMode duplicateMode)
     {
         AccountData importData = gson.fromJson(json, AccountData.class);
         if (importData == null)
@@ -176,26 +136,18 @@ public class ImportExportService
         if (importData.getAccounts() == null && importData.getGroups() == null)
         {
             Account singleAccount = gson.fromJson(json, Account.class);
-            if (singleAccount != null && singleAccount.getId() != null && singleAccount.getUsername() != null)
-            {
-                importData = AccountData.builder()
-                    .version(AccountData.CURRENT_VERSION)
-                    .accounts(java.util.Collections.singletonList(singleAccount))
-                    .groups(new java.util.ArrayList<>())
-                    .build();
-                log.debug("Detected single-account import, wrapped in AccountData");
-            }
-            else
+            if (singleAccount == null || singleAccount.getId() == null || singleAccount.getUsername() == null)
             {
                 return ImportResult.failure("Invalid data format");
             }
+            importData = AccountData.builder()
+                .version(AccountData.CURRENT_VERSION)
+                .accounts(new ArrayList<>(Collections.singletonList(singleAccount)))
+                .groups(new ArrayList<>())
+                .build();
+            log.debug("Detected single-account import, wrapped in AccountData");
         }
 
-        return doImport(importData, replace, duplicateMode);
-    }
-
-    private ImportResult doImport(AccountData importData, boolean replace, ImportDuplicateMode duplicateMode)
-    {
         String validationError = validateImportData(importData);
         if (validationError != null)
         {
@@ -204,10 +156,8 @@ public class ImportExportService
 
         normalizeImportData(importData);
 
-        ImportStats stats = accountStorage.importData(importData, replace, duplicateMode);
-        log.info("Imported accounts: added={}, skipped={}, updated={}, groups added={}",
-            stats.getAccountsAdded(), stats.getAccountsSkipped(), stats.getAccountsUpdated(), stats.getGroupsAdded());
-
+        ImportStats stats = accountStorage.importData(importData, duplicateMode);
+        log.debug("Imported accounts: {}", stats);
         return ImportResult.success(stats);
     }
 
@@ -247,8 +197,12 @@ public class ImportExportService
 
         if (data.getAccounts() != null)
         {
-            for (var profile : data.getAccounts())
+            for (Account profile : data.getAccounts())
             {
+                if (profile == null)
+                {
+                    return "Account entry is empty";
+                }
                 if (profile.getId() == null || profile.getId().isEmpty())
                 {
                     return "Account missing required ID field";
@@ -262,8 +216,12 @@ public class ImportExportService
 
         if (data.getGroups() != null)
         {
-            for (var group : data.getGroups())
+            for (ProfileGroup group : data.getGroups())
             {
+                if (group == null)
+                {
+                    return "Category entry is empty";
+                }
                 if (group.getId() == null || group.getId().isEmpty())
                 {
                     return "Group missing required ID field";

@@ -1,9 +1,12 @@
 package com.mylosis.roster.ui.components;
 
+import lombok.EqualsAndHashCode;
+import lombok.RequiredArgsConstructor;
 import net.runelite.client.ui.ColorScheme;
 
 import java.awt.Color;
 import java.awt.Font;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -13,8 +16,8 @@ public final class Theme
 {
     private Theme() {} // Prevent instantiation
 
-    /** Plugin version string displayed in the UI header. */
-    public static final String VERSION = "1.1";
+    /** Plugin version shown in the panel header. Must match {@code version} in build.gradle (a unit test checks). */
+    public static final String VERSION = "1.1.4";
 
     // Base colors
     public static final Color BACKGROUND = ColorScheme.DARK_GRAY_COLOR;
@@ -45,18 +48,16 @@ public final class Theme
     public static final Color BUTTON_SECONDARY = ColorScheme.DARKER_GRAY_COLOR;
     public static final Color BUTTON_SECONDARY_HOVER = ColorScheme.DARK_GRAY_HOVER_COLOR;
     public static final Color BUTTON_DANGER = new Color(220, 53, 69);
-    public static final Color BUTTON_DANGER_HOVER = new Color(240, 73, 89);
 
     // Accent colors
     public static final Color ACCENT_ORANGE = ColorScheme.BRAND_ORANGE;
     public static final Color ACCENT_BLUE = new Color(66, 135, 245);
-    public static final Color ACCENT_YELLOW = new Color(220, 180, 80);
 
     // Online indicator
     public static final Color ONLINE_INDICATOR = new Color(60, 180, 75);
     public static final int ONLINE_DOT_SIZE = 8;
 
-    // Category color palette (preset options for user selection) — names paired with colors
+    // Category color palette (preset options for user selection), names paired with colors
     public static final String[] CATEGORY_COLOR_NAMES = {
         "Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Pink", "Teal"
     };
@@ -92,20 +93,16 @@ public final class Theme
     public static final int SPACING_SM = 6;
     public static final int SPACING_MD = 10;
     public static final int SPACING_LG = 14;
-    public static final int SPACING_XL = 20;
 
-    // Border radius (for reference, actual rounding done in painting)
+    // Corner radii used when painting rounded shapes
     public static final int BORDER_RADIUS_SM = 4;
     public static final int BORDER_RADIUS_MD = 6;
-    public static final int BORDER_RADIUS_LG = 8;
 
     // Component sizes
     public static final int BUTTON_HEIGHT = 32;
     public static final int BUTTON_HEIGHT_SM = 26;
     public static final int ICON_SIZE = 18;
-    public static final int ICON_SIZE_SM = 14;
     public static final int CARD_HEIGHT = 80;
-    public static final int SCROLLBAR_WIDTH = 18;
     public static final int MENU_BUTTON_SIZE = 32;
 
     // Font sizes
@@ -143,13 +140,21 @@ public final class Theme
     }
 
     /**
-     * Memoized font derivations. Each card on a panel rebuild derives 4–5 fonts
-     * from the same base (the L&F default), so for 100 accounts that's ~500
-     * {@code Font.deriveFont} allocations per rebuild. AWT Fonts are immutable,
-     * so caching by (base, style, size) is safe and the cache stays small in
-     * practice (a handful of base fonts × ~6 sizes × 2 styles).
+     * Memoized font derivations. Each card derives several fonts from the same
+     * L&F default on every rebuild; AWT fonts are immutable, so caching by
+     * (base, style, size) is safe. Keyed by value, and the cache stays small in
+     * practice: a handful of base fonts times a few sizes and two styles.
      */
-    private static final java.util.Map<Long, Font> FONT_CACHE = new ConcurrentHashMap<>();
+    private static final Map<FontKey, Font> FONT_CACHE = new ConcurrentHashMap<>();
+
+    @EqualsAndHashCode
+    @RequiredArgsConstructor
+    private static final class FontKey
+    {
+        private final Font base;
+        private final int style;
+        private final float size;
+    }
 
     /**
      * Creates a font with the specified style and size, reusing a cached
@@ -158,20 +163,7 @@ public final class Theme
     public static Font font(Font base, int style, float size)
     {
         if (base == null) return null;
-        // Pack base identity hash + style + size into a single long key. Base
-        // identity (rather than equals) is intentional — distinct Font instances
-        // can derive differently even when superficially equal. Size is stored
-        // in quarter-points: raw float bits put the distinguishing bits of
-        // small integral sizes in the HIGH bits, so masking them with 0xFFFF
-        // would collapse every size into one cache entry.
-        long key = ((long) System.identityHashCode(base) << 32)
-            | ((long) (style & 0xFFFF) << 16)
-            | ((long) (size * 4f) & 0xFFFFL);
-        Font cached = FONT_CACHE.get(key);
-        if (cached != null) return cached;
-        Font derived = base.deriveFont(style, size);
-        FONT_CACHE.put(key, derived);
-        return derived;
+        return FONT_CACHE.computeIfAbsent(new FontKey(base, style, size), k -> base.deriveFont(style, size));
     }
 
     /**

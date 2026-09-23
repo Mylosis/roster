@@ -3,270 +3,154 @@ package com.mylosis.roster.ui;
 import com.mylosis.roster.RosterPlugin;
 import com.mylosis.roster.model.Account;
 import com.mylosis.roster.model.ProfileGroup;
+import com.mylosis.roster.ui.components.Controls;
 import com.mylosis.roster.ui.components.Theme;
 import com.mylosis.roster.ui.dnd.CategoryDragListener;
 import com.mylosis.roster.ui.dnd.DragDropManager;
-import com.mylosis.roster.ui.dnd.AccountDragListener;
 import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 
-@Slf4j
+/**
+ * One category in the list: a header (collapse chevron, name, count, add and
+ * menu buttons; click to collapse, drag to reorder) above its account cards.
+ */
 public class CategoryPanel extends JPanel
 {
+    private static final String CHEVRON_EXPANDED = "\u25BC";
+    private static final String CHEVRON_COLLAPSED = "\u25B6";
+    /** Longer names are cut so the header row never outgrows the panel. */
+    private static final int NAME_MAX_CHARS = 14;
+
     private final RosterPlugin plugin;
     @Getter
     private final ProfileGroup group;
-    private final List<Account> profiles;
-    private final DragDropManager dragDropManager;
     private final CategoryFormHandler formHandler;
-    /** The owning panel — passed in directly because plugin.getPanel() is not yet
-     *  populated during the very first rebuild (it runs inside the RosterPanel
-     *  constructor, before RosterPlugin's field is assigned). */
-    private final RosterPanel ownerPanel;
 
+    private final JPanel headerPanel;
     private final JPanel contentWrapper;
-    /** The header's collapse chevron, assigned in {@link #createHeader()} and
-     *  updated by {@link #updateCollapsedState()}. Single source of truth (a
-     *  previous revision kept a second, never-displayed label in sync). */
-    private JLabel chevronLabel;
-    /** Header component, exposed via {@link #getHeaderHeight()} so the drag
-     *  target finder can use the real header bounds instead of assuming 45px. */
-    private JPanel headerPanel;
+    private final JLabel chevronLabel = new JLabel();
+    /** This category's cards, in display order. */
+    @Getter
+    private final List<AccountCardPanel> cards;
     private boolean collapsed;
 
-    /**
-     * @param groupsById pre-resolved group lookup shared by all cards built in this
-     *                   rebuild pass — saves an O(n) storage scan per card border.
-     * @param ownerPanel the RosterPanel hosting these cards. Passed in explicitly
-     *                   because plugin.getPanel() is null during the first rebuild
-     *                   (it runs inside RosterPanel's own constructor).
-     */
-    public CategoryPanel(RosterPlugin plugin, ProfileGroup group, List<Account> profiles,
-                         DragDropManager dragDropManager, Map<String, ProfileGroup> groupsById,
-                         RosterPanel ownerPanel)
+    public CategoryPanel(RosterPlugin plugin, RosterPanel panel, ProfileGroup group, List<Account> accounts,
+                         DragDropManager dragDropManager)
     {
         this.plugin = plugin;
         this.group = group;
-        this.profiles = profiles;
-        this.dragDropManager = dragDropManager;
-        this.ownerPanel = ownerPanel;
         this.collapsed = group.isCollapsed();
-        this.formHandler = new CategoryFormHandler(plugin, group, this::toggleCollapsed);
+        this.formHandler = new CategoryFormHandler(plugin, panel, group, this);
 
         setLayout(new BorderLayout());
         setBackground(Theme.BACKGROUND);
         setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
 
-        add(createHeader(), BorderLayout.NORTH);
+        headerPanel = createHeader(accounts.size(), dragDropManager);
+        add(headerPanel, BorderLayout.NORTH);
 
-        boolean gridMode = plugin.getConfig().gridView();
-
-        contentWrapper = new JPanel();
-        contentWrapper.setBackground(Theme.BACKGROUND);
-
-        if (gridMode)
-        {
-            // Grid: use GridLayout inside a NORTH-aligned wrapper so it doesn't stretch
-            int cols = 2;
-            JPanel gridPanel = new JPanel(new GridLayout(0, cols, Theme.SPACING_XS, Theme.SPACING_XS));
-            gridPanel.setBackground(Theme.BACKGROUND);
-
-            for (Account profile : profiles)
-            {
-                AccountCardPanel card = new AccountCardPanel(plugin, profile, ownerPanel, groupsById);
-                AccountDragListener dragListener = new AccountDragListener(dragDropManager, profile, card);
-                dragListener.attachToComponent(card);
-                gridPanel.add(card);
-                if (ownerPanel != null) ownerPanel.registerCard(profile.getId(), card);
-            }
-
-            contentWrapper.setLayout(new BorderLayout());
-            contentWrapper.setBorder(new EmptyBorder(Theme.SPACING_SM, 0, 0, 0));
-            contentWrapper.add(gridPanel, BorderLayout.NORTH);
-            contentWrapper.add(formHandler.getOrCreateFormPanel(), BorderLayout.CENTER);
-        }
-        else
-        {
-            contentWrapper.setLayout(new BoxLayout(contentWrapper, BoxLayout.Y_AXIS));
-            contentWrapper.setBorder(new EmptyBorder(Theme.SPACING_SM, 0, 0, 0));
-
-            for (Account profile : profiles)
-            {
-                AccountCardPanel card = new AccountCardPanel(plugin, profile, ownerPanel, groupsById);
-                AccountDragListener dragListener = new AccountDragListener(dragDropManager, profile, card);
-                dragListener.attachToComponent(card);
-                contentWrapper.add(card);
-                contentWrapper.add(Box.createVerticalStrut(Theme.SPACING_XS));
-                if (ownerPanel != null) ownerPanel.registerCard(profile.getId(), card);
-            }
-
-            contentWrapper.add(formHandler.getOrCreateFormPanel());
-        }
-
+        List<AccountCardPanel> built = new ArrayList<>();
+        contentWrapper = CardListBuilder.build(plugin, panel, dragDropManager, accounts,
+            Theme.parseColor(group.getColor()), formHandler.getFormPanel(), built);
+        contentWrapper.setBorder(new EmptyBorder(Theme.SPACING_SM, 0, 0, 0));
+        cards = Collections.unmodifiableList(built);
         add(contentWrapper, BorderLayout.CENTER);
 
         updateCollapsedState();
     }
 
     /**
-     * Height of the category header row, or 0 if not yet laid out. Used by
-     * {@code DropTargetFinder} to size the category-reorder hit zone.
+     * Height of the header row, or 0 if not yet laid out. Used to size the
+     * category-reorder hit zone.
      */
     public int getHeaderHeight()
     {
-        return headerPanel != null ? headerPanel.getHeight() : 0;
+        return headerPanel.getHeight();
     }
 
-    private JPanel createHeader()
+    boolean isCollapsed()
     {
-        JPanel headerPanel = new JPanel(new BorderLayout(Theme.SPACING_MD, 0));
-        this.headerPanel = headerPanel;
-        headerPanel.setBackground(Theme.GROUP_HEADER);
-        headerPanel.setBorder(BorderFactory.createCompoundBorder(
+        return collapsed;
+    }
+
+    private JPanel createHeader(int accountCount, DragDropManager dragDropManager)
+    {
+        JPanel header = new JPanel(new BorderLayout(Theme.SPACING_MD, 0));
+        header.setBackground(Theme.GROUP_HEADER);
+        header.setBorder(BorderFactory.createCompoundBorder(
             BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.CARD_BORDER),
             new EmptyBorder(Theme.SPACING_SM, Theme.SPACING_MD, Theme.SPACING_SM, Theme.SPACING_MD)
         ));
-        headerPanel.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        header.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
-        JPanel leftPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, Theme.SPACING_SM, 0));
-        leftPanel.setOpaque(false);
+        // A single row that never wraps: anything too wide is clipped instead.
+        JPanel left = new JPanel();
+        left.setLayout(new BoxLayout(left, BoxLayout.X_AXIS));
+        left.setOpaque(false);
+        left.add(Box.createHorizontalStrut(Theme.SPACING_SM));
 
-        // Chevron colored by category color when enabled
-        Color catColor = Theme.parseColor(group.getColor());
-
-        chevronLabel = new JLabel(collapsed ? "\u25B6" : "\u25BC");
-        chevronLabel.setForeground(catColor != null ? catColor : Theme.TEXT_SECONDARY);
+        Color categoryColor = Theme.parseColor(group.getColor());
+        chevronLabel.setForeground(categoryColor != null ? categoryColor : Theme.TEXT_SECONDARY);
         chevronLabel.setFont(Theme.fontRegular(chevronLabel.getFont(), Theme.FONT_SIZE_TINY));
-        leftPanel.add(chevronLabel);
+        left.add(chevronLabel);
+        left.add(Box.createHorizontalStrut(Theme.SPACING_SM));
 
-        // Category names are user-controlled (and importable) — never let them
-        // activate the HTML renderer.
-        JLabel nameLabel = AccountCardHelper.plainTextOnly(new JLabel(group.getName()));
-        nameLabel.setForeground(Theme.TEXT_PRIMARY);
-        nameLabel.setFont(Theme.fontBold(nameLabel.getFont(), Theme.FONT_SIZE_BODY));
-        leftPanel.add(nameLabel);
+        left.add(AccountCardHelper.truncatingLabel(group.getName(), Theme.TEXT_PRIMARY,
+            Theme.fontBold(chevronLabel.getFont(), Theme.FONT_SIZE_BODY), NAME_MAX_CHARS));
+        left.add(Box.createHorizontalStrut(Theme.SPACING_SM));
 
-        JLabel countLabel = new JLabel("\u2022 " + profiles.size());
+        JLabel countLabel = new JLabel("\u2022 " + accountCount);
         countLabel.setForeground(Theme.TEXT_SECONDARY);
         countLabel.setFont(Theme.fontBold(countLabel.getFont(), Theme.FONT_SIZE_BODY));
-        leftPanel.add(countLabel);
+        left.add(countLabel);
+        header.add(left, BorderLayout.CENTER);
 
-        headerPanel.add(leftPanel, BorderLayout.CENTER);
+        JButton menuButton = Controls.ghostButton("\u22EE", Theme.TEXT_SECONDARY, Theme.GROUP_HEADER_HOVER, Theme.TEXT_PRIMARY);
+        menuButton.setPreferredSize(new Dimension(24, Theme.BUTTON_HEIGHT_SM));
+        menuButton.setToolTipText("Category options");
+        Controls.attachLazyMenu(menuButton, formHandler::createContextMenu);
 
-        JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
-        rightPanel.setOpaque(false);
-        rightPanel.add(createAddButton());
-        rightPanel.add(createMenuButton());
-        headerPanel.add(rightPanel, BorderLayout.EAST);
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
+        right.setOpaque(false);
+        right.add(createHeaderAddButton("Add account to this category", formHandler::toggleAddForm));
+        right.add(menuButton);
+        header.add(right, BorderLayout.EAST);
 
-        CategoryDragListener categoryDragListener = new CategoryDragListener(dragDropManager, group);
-        headerPanel.addMouseListener(categoryDragListener);
-        headerPanel.addMouseMotionListener(categoryDragListener);
-
-        headerPanel.addMouseListener(new MouseAdapter()
+        CategoryDragListener dragListener = new CategoryDragListener(dragDropManager, group, this::toggleCollapsed);
+        header.addMouseListener(dragListener);
+        header.addMouseMotionListener(dragListener);
+        header.addMouseListener(new MouseAdapter()
         {
-            private long pressTime = 0;
-            private Point pressPoint = null;
+            @Override
+            public void mouseEntered(MouseEvent e) { header.setBackground(Theme.GROUP_HEADER_HOVER); }
 
             @Override
-            public void mousePressed(MouseEvent e) { pressTime = System.currentTimeMillis(); pressPoint = e.getPoint(); }
-
-            @Override
-            public void mouseReleased(MouseEvent e)
-            {
-                if (pressPoint != null)
-                {
-                    long duration = System.currentTimeMillis() - pressTime;
-                    int dx = Math.abs(e.getPoint().x - pressPoint.x);
-                    int dy = Math.abs(e.getPoint().y - pressPoint.y);
-                    if (duration < 300 && dx < 5 && dy < 5 && e.getButton() == MouseEvent.BUTTON1)
-                    {
-                        // updateCollapsedState() flips the chevron too.
-                        toggleCollapsed();
-                    }
-                }
-                pressPoint = null;
-            }
-
-            @Override
-            public void mouseEntered(MouseEvent e) { headerPanel.setBackground(Theme.GROUP_HEADER_HOVER); }
-
-            @Override
-            public void mouseExited(MouseEvent e) { headerPanel.setBackground(Theme.GROUP_HEADER); }
+            public void mouseExited(MouseEvent e) { header.setBackground(Theme.GROUP_HEADER); }
         });
-
-        return headerPanel;
+        return header;
     }
 
-    private JButton createAddButton()
+    /** The "+" button used in category headers and the Uncategorized header. */
+    static JButton createHeaderAddButton(String tooltip, Runnable onClick)
     {
-        JButton button = new JButton("+");
-        button.setBackground(Theme.GROUP_HEADER);
-        button.setForeground(Theme.TEXT_SECONDARY);
-        button.setFocusPainted(false);
-        button.setBorderPainted(false);
+        JButton button = Controls.ghostButton("+", Theme.TEXT_SECONDARY, Theme.BUTTON_PRIMARY, Theme.TEXT_PRIMARY);
         button.setPreferredSize(new Dimension(28, Theme.BUTTON_HEIGHT_SM));
-        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        button.setToolTipText("Add account to this category");
+        button.setToolTipText(tooltip);
         button.setFont(button.getFont().deriveFont(Font.BOLD, 18f));
-        button.addActionListener(e -> formHandler.toggleAddForm(collapsed, this));
-        button.addMouseListener(new MouseAdapter()
-        {
-            @Override
-            public void mouseClicked(MouseEvent e) { e.consume(); }
-
-            @Override
-            public void mouseEntered(MouseEvent e) { button.setBackground(Theme.BUTTON_PRIMARY); button.setForeground(Theme.TEXT_PRIMARY); }
-
-            @Override
-            public void mouseExited(MouseEvent e) { button.setBackground(Theme.GROUP_HEADER); button.setForeground(Theme.TEXT_SECONDARY); }
-        });
+        button.addActionListener(e -> onClick.run());
         return button;
     }
 
-    private JButton createMenuButton()
-    {
-        JButton button = new JButton("\u22EE");
-        button.setBackground(Theme.GROUP_HEADER);
-        button.setForeground(Theme.TEXT_SECONDARY);
-        button.setFocusPainted(false);
-        button.setBorderPainted(false);
-        button.setPreferredSize(new Dimension(24, Theme.BUTTON_HEIGHT_SM));
-        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-
-        // Built on first click — the category menu (incl. the color submenu's
-        // ten items) was constructed for every category on every rebuild.
-        JPopupMenu[] menuRef = new JPopupMenu[1];
-        button.addActionListener(e -> {
-            if (menuRef[0] == null)
-            {
-                menuRef[0] = formHandler.createContextMenu();
-            }
-            menuRef[0].show(button, 0, button.getHeight());
-        });
-        button.addMouseListener(new MouseAdapter()
-        {
-            @Override
-            public void mouseClicked(MouseEvent e) { e.consume(); }
-
-            @Override
-            public void mouseEntered(MouseEvent e) { button.setBackground(Theme.GROUP_HEADER_HOVER); }
-
-            @Override
-            public void mouseExited(MouseEvent e) { button.setBackground(Theme.GROUP_HEADER); }
-        });
-        return button;
-    }
-
-    private void toggleCollapsed()
+    /** Collapses or expands the category and persists the state. */
+    void toggleCollapsed()
     {
         collapsed = !collapsed;
         group.setCollapsed(collapsed);
@@ -277,7 +161,7 @@ public class CategoryPanel extends JPanel
     private void updateCollapsedState()
     {
         contentWrapper.setVisible(!collapsed);
-        chevronLabel.setText(collapsed ? "\u25B6" : "\u25BC");
+        chevronLabel.setText(collapsed ? CHEVRON_COLLAPSED : CHEVRON_EXPANDED);
         revalidate();
         repaint();
     }

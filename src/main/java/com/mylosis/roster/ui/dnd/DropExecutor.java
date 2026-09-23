@@ -5,216 +5,172 @@ import com.mylosis.roster.model.Account;
 import com.mylosis.roster.model.AccountData;
 import com.mylosis.roster.model.ProfileGroup;
 import com.mylosis.roster.model.SortKey;
+import com.mylosis.roster.storage.AccountStorage;
 import com.mylosis.roster.ui.RosterPanel;
 import com.mylosis.roster.ui.components.NotificationToast;
 import lombok.extern.slf4j.Slf4j;
 
-import javax.swing.*;
+import javax.swing.SwingUtilities;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /**
- * Executes drop operations for profiles and categories.
- * Handles moving profiles between categories and reordering.
+ * Applies a completed drop: moves or reorders an account, or reorders a
+ * category, then saves the renumbered entries in one batch.
  */
 @Slf4j
-public class DropExecutor
+final class DropExecutor
 {
     private final RosterPlugin plugin;
     private final RosterPanel panel;
 
-    public DropExecutor(RosterPlugin plugin, RosterPanel panel)
+    /** Whether the "switch to Manual sort" hint was already shown this session. */
+    private boolean shownSortOverrideHint = false;
+
+    DropExecutor(RosterPlugin plugin, RosterPanel panel)
     {
         this.plugin = plugin;
         this.panel = panel;
     }
 
     /**
-     * Perform a profile drop (move to category or reorder).
+     * Drops an account into a category (or Uncategorized) between the target's
+     * visible neighbours.
      *
-     * <p>If a non-MANUAL sort key is active, dragging still records the new
-     * {@code sortOrder} so the user's drag intent is preserved — but the visible
-     * order won't change until they switch back to MANUAL. We surface a toast
-     * the first time this happens so users aren't confused by "nothing happened".
+     * <p>With a non-MANUAL sort active the new {@code sortOrder} is still
+     * recorded, but the visible order won't change until the user switches
+     * back to MANUAL; a one-time toast explains that.
      */
-    public void executeProfileDrop(DragDropManager.DropTarget target, Account draggedAccount)
+    void executeAccountDrop(DropTarget target, Account dragged)
     {
-        if (target.type != DragDropManager.DropTarget.Type.CATEGORY_DROP &&
-            target.type != DragDropManager.DropTarget.Type.UNCATEGORIZED)
+        if (target.getType() == DropTarget.Type.CATEGORY_REORDER)
         {
             return;
         }
-
-        String newGroupId = target.groupId;
-        String currentGroupId = draggedAccount.getGroupId();
-        int insertIndex = target.insertIndex;
-
-        boolean isDifferentCategory = (currentGroupId == null && newGroupId != null) ||
-            (currentGroupId != null && !currentGroupId.equals(newGroupId));
-
-        if (isDifferentCategory)
+        AccountStorage storage = plugin.getAccountStorage();
+        String targetGroup = target.getGroupId();
+        boolean sameCategory = Objects.equals(targetGroup, effectiveGroupId(storage, dragged));
+        if (sameCategory && (dragged.getId().equals(target.getBeforeId()) || dragged.getId().equals(target.getAfterId())))
         {
-            moveProfileToCategory(draggedAccount, newGroupId, insertIndex);
+            // Dropped back into its own slot.
+            return;
         }
-        else if (insertIndex >= 0)
+
+        List<Account> siblings = new ArrayList<>();
+        for (Account account : storage.getAccounts())
         {
-            reorderProfileInCategory(currentGroupId, draggedAccount, insertIndex);
+            if (!account.getId().equals(dragged.getId()) && Objects.equals(targetGroup, effectiveGroupId(storage, account)))
+            {
+                siblings.add(account);
+            }
+        }
+        siblings.sort(AccountData.SORT_ORDER_COMPARATOR);
+
+        List<String> siblingIds = new ArrayList<>(siblings.size());
+        siblings.forEach(a -> siblingIds.add(a.getId()));
+        int index = resolveInsertIndex(siblingIds, target.getBeforeId(), target.getAfterId());
+
+        dragged.setGroupId(targetGroup);
+        storage.saveAccounts(renumberWithInsert(siblings, dragged, index));
+        log.debug("Dropped account {} into category {} at position {}", dragged.getId(), targetGroup, index);
+
+        if (sameCategory)
+        {
             notifyIfSortOverridden();
-            SwingUtilities.invokeLater(() -> panel.rebuild());
-            log.debug("Reordered account {} to position {} in category {}",
-                draggedAccount.getId(), insertIndex, currentGroupId);
         }
+        SwingUtilities.invokeLater(panel::rebuild);
     }
 
-    /**
-     * If a non-MANUAL sort is active, the drag has updated {@code sortOrder} but the
-     * visible position won't change. Tell the user once per session so the lack of
-     * visible movement doesn't read as a broken drag.
-     */
-    private boolean shownSortOverrideHint = false;
-
-    private void notifyIfSortOverridden()
+    /** Moves a category before or after the category it was dropped on. */
+    void executeCategoryDrop(DropTarget target, ProfileGroup dragged)
     {
-        if (shownSortOverrideHint)
+        if (target.getType() != DropTarget.Type.CATEGORY_REORDER)
         {
             return;
         }
-        SortKey active = plugin.getConfig().sortKey();
-        if (active == SortKey.MANUAL)
+        AccountStorage storage = plugin.getAccountStorage();
+        List<ProfileGroup> groups = storage.getGroups();
+        List<String> previousOrder = idsOf(groups);
+
+        groups.removeIf(g -> g.getId().equals(dragged.getId()));
+        int index = resolveInsertIndex(idsOf(groups), target.getBeforeId(), target.getAfterId());
+        groups.add(index, dragged);
+        if (idsOf(groups).equals(previousOrder))
         {
             return;
         }
-        shownSortOverrideHint = true;
-        SwingUtilities.invokeLater(() ->
-            panel.showNotification(
-                "Drag order saved — switch to Manual sort to see it",
-                NotificationToast.Type.INFO));
-    }
-
-    /**
-     * Perform a category drop (reorder categories).
-     */
-    public void executeCategoryDrop(DragDropManager.DropTarget target, ProfileGroup draggedCategory)
-    {
-        if (target.type != DragDropManager.DropTarget.Type.CATEGORY_REORDER) return;
-
-        List<ProfileGroup> groups = new ArrayList<>(plugin.getAccountStorage().getGroups());
-        groups.sort((a, b) -> Integer.compare(a.getSortOrder(), b.getSortOrder()));
-
-        int currentIndex = findGroupIndex(groups, draggedCategory.getId());
-        if (currentIndex == -1) return;
-
-        groups.remove(currentIndex);
-
-        int insertIndex = target.insertIndex;
-        if (currentIndex < insertIndex) insertIndex--;
-        insertIndex = Math.max(0, Math.min(insertIndex, groups.size()));
-        groups.add(insertIndex, draggedCategory);
 
         for (int i = 0; i < groups.size(); i++)
         {
             groups.get(i).setSortOrder(i);
         }
-        // One batched save — per-group saveGroup() serialized the whole roster
-        // into ConfigManager once per category, on the EDT.
-        plugin.getAccountStorage().saveGroups(groups);
-
-        SwingUtilities.invokeLater(() -> panel.rebuild());
-        log.debug("Reordered category {} to position {}", draggedCategory.getName(), insertIndex);
+        storage.saveGroups(groups);
+        log.debug("Moved category {} to position {}", dragged.getId(), index);
+        SwingUtilities.invokeLater(panel::rebuild);
     }
 
-    private void moveProfileToCategory(Account profile, String newGroupId, int insertIndex)
+    private void notifyIfSortOverridden()
     {
-        profile.setGroupId(newGroupId);
-
-        // Batch the moved account and every renumbered sibling into one save —
-        // per-account saveAccount() serialized the whole roster into
-        // ConfigManager once per account, making a drop O(n²) on the EDT.
-        List<Account> siblings = getAccountsInCategory(newGroupId, profile.getId());
-        siblings.sort(AccountData.SORT_ORDER_COMPARATOR);
-        List<Account> changed = renumberWithInsert(siblings, profile, insertIndex);
-        plugin.getAccountStorage().saveAccounts(changed);
-
-        SwingUtilities.invokeLater(() -> panel.rebuild());
-        log.debug("Moved account {} to category {} at position {}",
-            profile.getId(), newGroupId, insertIndex);
+        if (shownSortOverrideHint || plugin.getConfig().sortKey() == SortKey.MANUAL)
+        {
+            return;
+        }
+        shownSortOverrideHint = true;
+        SwingUtilities.invokeLater(() -> panel.showNotification(
+            "Drag order saved. Switch to Manual sort to see it.", NotificationToast.Type.INFO));
     }
 
-    private void reorderProfileInCategory(String groupId, Account profile, int newIndex)
+    /** The category an account is shown in: its group if that exists, else Uncategorized (null). */
+    private static String effectiveGroupId(AccountStorage storage, Account account)
     {
-        List<Account> siblings = getAccountsInCategory(groupId, profile.getId());
-        siblings.sort(AccountData.SORT_ORDER_COMPARATOR);
-        List<Account> changed = renumberWithInsert(siblings, profile, newIndex);
-        plugin.getAccountStorage().saveAccounts(changed);
+        String gid = account.getGroupId();
+        return gid != null && storage.getGroup(gid) != null ? gid : null;
+    }
+
+    private static List<String> idsOf(List<ProfileGroup> groups)
+    {
+        List<String> ids = new ArrayList<>(groups.size());
+        groups.forEach(g -> ids.add(g.getId()));
+        return ids;
+    }
+
+    /**
+     * Converts a drop's visible neighbours into an index in the stored order
+     * ({@code orderedIds}, which excludes the moved entry): in front of
+     * {@code beforeId}, else right after {@code afterId}, else at the end.
+     */
+    static int resolveInsertIndex(List<String> orderedIds, String beforeId, String afterId)
+    {
+        int before = beforeId != null ? orderedIds.indexOf(beforeId) : -1;
+        if (before >= 0)
+        {
+            return before;
+        }
+        int after = afterId != null ? orderedIds.indexOf(afterId) : -1;
+        if (after >= 0)
+        {
+            return after + 1;
+        }
+        return orderedIds.size();
     }
 
     /**
      * Inserts {@code moved} into {@code siblings} (sorted, not containing it) at
-     * {@code insertIndex} and renumbers everyone's {@code sortOrder} sequentially.
-     * A negative index means "no position information" (e.g. a drop on the
-     * Uncategorized header) and appends: previously that case renumbered the
-     * siblings but left the moved account's stale sortOrder untouched, so it
-     * landed at an unpredictable position. Package-private and side-effect-only
-     * on the passed accounts, so tests can exercise the ordering math directly.
+     * {@code insertIndex} and renumbers everyone's {@code sortOrder}
+     * sequentially. Out-of-range indexes append.
      *
-     * @return the accounts whose sortOrder was written, ready for a batched save.
+     * @return every renumbered account, moved one included, ready for a batched save
      */
     static List<Account> renumberWithInsert(List<Account> siblings, Account moved, int insertIndex)
     {
-        if (insertIndex < 0)
-        {
-            insertIndex = siblings.size();
-        }
-        insertIndex = Math.min(insertIndex, siblings.size());
-
+        int index = insertIndex < 0 || insertIndex > siblings.size() ? siblings.size() : insertIndex;
         List<Account> ordered = new ArrayList<>(siblings);
-        ordered.add(insertIndex, moved);
-
-        List<Account> changed = new ArrayList<>(ordered.size());
+        ordered.add(index, moved);
         for (int i = 0; i < ordered.size(); i++)
         {
-            Account p = ordered.get(i);
-            // Null metadata is backfilled by AccountStorage.ensureSchema on load,
-            // so this guard is belt-and-braces for accounts built in memory.
-            if (p.getMetadata() != null)
-            {
-                p.getMetadata().setSortOrder(i);
-                changed.add(p);
-            }
-            else if (p == moved)
-            {
-                // The moved account must always ride the batched save: a cross-
-                // category move changes its groupId, and if the batch came back
-                // empty the save would be skipped and the move lost on reload.
-                changed.add(p);
-            }
+            ordered.get(i).ensureMetadata().setSortOrder(i);
         }
-        return changed;
-    }
-
-    private List<Account> getAccountsInCategory(String groupId, String excludeProfileId)
-    {
-        List<Account> result = new ArrayList<>();
-        for (Account p : plugin.getAccountStorage().getAccounts())
-        {
-            String pGroupId = p.getGroupId();
-            boolean sameCategory = (groupId == null && pGroupId == null) ||
-                (groupId != null && groupId.equals(pGroupId));
-
-            if (sameCategory && (excludeProfileId == null || !p.getId().equals(excludeProfileId)))
-            {
-                result.add(p);
-            }
-        }
-        return result;
-    }
-
-    private int findGroupIndex(List<ProfileGroup> groups, String groupId)
-    {
-        for (int i = 0; i < groups.size(); i++)
-        {
-            if (groups.get(i).getId().equals(groupId)) return i;
-        }
-        return -1;
+        return ordered;
     }
 }

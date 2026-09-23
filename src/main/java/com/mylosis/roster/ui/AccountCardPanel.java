@@ -1,481 +1,293 @@
 package com.mylosis.roster.ui;
 
-import com.mylosis.roster.RosterConfig;
 import com.mylosis.roster.RosterPlugin;
 import com.mylosis.roster.model.Account;
-import com.mylosis.roster.model.AccountMetadata;
-import com.mylosis.roster.model.AccountType;
-import com.mylosis.roster.model.ProfileGroup;
-import com.mylosis.roster.ui.components.AccountTypeBadge;
+import com.mylosis.roster.ui.components.Controls;
 import com.mylosis.roster.ui.components.InlineAccountForm;
 import com.mylosis.roster.ui.components.Theme;
 import lombok.Getter;
 
 import javax.swing.*;
+import javax.swing.border.Border;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
-import java.util.Collections;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 
+/**
+ * One account in the list: a list-view card (details plus edit and menu
+ * buttons, expanding into an inline editor) or a compact grid-view tile.
+ * Transient state (selection, online status, last-online) is refreshed in
+ * place by {@link #refreshDynamicState()} without rebuilding the panel.
+ */
 public class AccountCardPanel extends JPanel
 {
     private final RosterPlugin plugin;
+    private final RosterPanel panel;
     @Getter
-    private final Account profile;
-    private final RosterConfig config;
+    private final Account account;
+    private final boolean gridMode;
+    /** Click/drag listeners spread over the card's non-interactive subtree; re-applied when content is rebuilt. */
+    private final List<MouseAdapter> treeListeners = new ArrayList<>();
+    /** Spread over the whole subtree, buttons included, so leaving via a button still ends the hover. */
+    private final HoverTracker hoverTracker = new HoverTracker();
 
     private boolean hovered = false;
-    private Color currentBackground;
-    private JPanel headerPanel;
-    private CardExpansionHandler expansionHandler;
-    private boolean gridEditMode = false;
-    private RosterPanel parentPanel;
-    /** Pre-resolved group lookup passed down from the rebuild — used by
-     *  {@link #createCardBorder()} so each card no longer does its own
-     *  O(n) storage scan to find its parent group's color. */
-    private final Map<String, ProfileGroup> groupsById;
 
-    public AccountCardPanel(RosterPlugin plugin, Account profile, RosterPanel parentPanel)
-    {
-        this(plugin, profile, parentPanel, Collections.emptyMap());
-    }
+    // List view
+    private JPanel infoHolder;
+    private CardExpansionHandler expansion;
 
-    public AccountCardPanel(RosterPlugin plugin, Account profile, RosterPanel parentPanel,
-                            Map<String, ProfileGroup> groupsById)
+    // Grid view
+    private boolean gridEditing = false;
+
+    /**
+     * @param categoryColor the owning category's color for the left edge stripe; null for none
+     */
+    public AccountCardPanel(RosterPlugin plugin, RosterPanel panel, Account account, Color categoryColor)
     {
         this.plugin = plugin;
-        this.profile = profile;
-        this.config = plugin.getConfig();
-        this.parentPanel = parentPanel;
-        this.groupsById = groupsById != null ? groupsById : Collections.emptyMap();
-        boolean isSelected = profile.getId().equals(plugin.getSelectedAccountId());
-        this.currentBackground = isSelected ? Theme.CARD_SELECTED : Theme.CARD_BACKGROUND;
+        this.panel = panel;
+        this.account = account;
+        this.gridMode = plugin.getConfig().gridView();
 
         setLayout(new BorderLayout(0, 0));
-        setBackground(currentBackground);
-        setBorder(createCardBorder());
-        setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-
-        if (config.gridView())
+        setBorder(createBorder(categoryColor));
+        if (gridMode)
         {
-            GridAccountBuilder.build(this, plugin, profile, this::expandGridEdit);
-            setPreferredSize(new Dimension(0, GridAccountBuilder.GRID_CARD_HEIGHT));
-            setMaximumSize(new Dimension(Integer.MAX_VALUE, GridAccountBuilder.GRID_CARD_HEIGHT));
+            showGridContent();
         }
         else
         {
             setMaximumSize(new Dimension(Integer.MAX_VALUE, Theme.CARD_HEIGHT));
-            buildCard(parentPanel);
+            setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            buildListCard();
         }
-        setupMouseListeners();
+        updateBackground();
+        AccountCardHelper.attachToTree(this, hoverTracker, false);
     }
 
-    private javax.swing.border.Border createCardBorder()
+    private static Border createBorder(Color categoryColor)
     {
-        String gid = profile.getGroupId();
-        if (gid != null)
+        Border line = BorderFactory.createLineBorder(Theme.CARD_BORDER, 1);
+        if (categoryColor == null)
         {
-            // Prefer the pre-resolved map; fall back to storage only when this card
-            // was constructed via the legacy single-arg constructor (e.g. dialogs).
-            ProfileGroup group = groupsById.get(gid);
-            if (group == null)
-            {
-                group = plugin.getAccountStorage().getGroup(gid);
-            }
-            if (group != null)
-            {
-                Color catColor = Theme.parseColor(group.getColor());
-                if (catColor != null)
-                {
-                    return BorderFactory.createCompoundBorder(
-                        BorderFactory.createMatteBorder(0, Theme.CATEGORY_BORDER_WIDTH, 0, 0, catColor),
-                        BorderFactory.createLineBorder(Theme.CARD_BORDER, 1)
-                    );
-                }
-            }
+            return line;
         }
-        return BorderFactory.createLineBorder(Theme.CARD_BORDER, 1);
+        return BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, Theme.CATEGORY_BORDER_WIDTH, 0, 0, categoryColor), line);
     }
 
-    private JPanel infoPanelHolder;
-
-    private void buildCard(RosterPanel parentPanel)
+    private void buildListCard()
     {
-        headerPanel = new JPanel(new BorderLayout(Theme.SPACING_MD, 0));
-        headerPanel.setOpaque(false);
-        headerPanel.setBorder(new EmptyBorder(Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG));
+        JPanel header = new JPanel(new BorderLayout(Theme.SPACING_MD, 0));
+        header.setOpaque(false);
+        header.setBorder(new EmptyBorder(Theme.SPACING_MD, Theme.SPACING_LG, Theme.SPACING_MD, Theme.SPACING_LG));
 
-        // Wrap the info panel so refreshDynamicState() can replace it in place
-        // without disturbing the action buttons (which carry their own listeners).
-        infoPanelHolder = new JPanel(new BorderLayout());
-        infoPanelHolder.setOpaque(false);
-        infoPanelHolder.add(createInfoPanel(), BorderLayout.CENTER);
-        headerPanel.add(infoPanelHolder, BorderLayout.CENTER);
-        headerPanel.add(createActionButtons(), BorderLayout.EAST);
+        // The info column sits in a holder so refreshDynamicState() can swap
+        // it without touching the buttons.
+        infoHolder = new JPanel(new BorderLayout());
+        infoHolder.setOpaque(false);
+        infoHolder.add(ListCardBuilder.buildInfo(plugin, panel, account, getFont()), BorderLayout.CENTER);
+        header.add(infoHolder, BorderLayout.CENTER);
+        header.add(createActionButtons(), BorderLayout.EAST);
+        add(header, BorderLayout.NORTH);
 
-        add(headerPanel, BorderLayout.NORTH);
-
-        expansionHandler = new CardExpansionHandler(plugin, profile, parentPanel, this, headerPanel);
-        JPanel formPanel = expansionHandler.createFormPanel();
-        formPanel.setVisible(false);
-        add(formPanel, BorderLayout.CENTER);
-    }
-
-    /**
-     * Recompute the parts of this card that depend on transient plugin state
-     * (selected highlight, online dot, last-online label) without rebuilding
-     * the full panel. Called by {@link RosterPanel#refreshAccount(String)} after
-     * {@code selectAccount} or {@code stampLastOnline}.
-     *
-     * <p>Grid cards are rebuilt by {@code GridAccountBuilder}, which composes the
-     * whole card body in a single call — for those we fall back to a full panel
-     * rebuild via the caller (which handles a missing card id the same way).
-     * No-op when the card is currently expanded for editing.
-     */
-    public void refreshDynamicState()
-    {
-        if (config.gridView() || infoPanelHolder == null)
-        {
-            // Grid cards aren't covered by the holder pattern. Punt to a full
-            // rebuild — incremental work isn't worth the complexity for the
-            // compact view. The caller will catch this via the cardsByAccountId
-            // miss path on the next refresh.
-            if (plugin.getPanel() != null) plugin.getPanel().rebuild();
-            return;
-        }
-        if (expansionHandler != null && expansionHandler.isExpanded())
-        {
-            // Don't rebuild the info panel while the user is editing — would
-            // visually flicker the form open beneath them.
-            return;
-        }
-        boolean isSelected = profile.getId().equals(plugin.getSelectedAccountId());
-        currentBackground = isSelected ? Theme.CARD_SELECTED : Theme.CARD_BACKGROUND;
-        setBackground(currentBackground);
-
-        infoPanelHolder.removeAll();
-        infoPanelHolder.add(createInfoPanel(), BorderLayout.CENTER);
-        infoPanelHolder.revalidate();
-        infoPanelHolder.repaint();
-    }
-
-    private JPanel createInfoPanel()
-    {
-        JPanel infoPanel = new JPanel(new GridBagLayout());
-        infoPanel.setOpaque(false);
-
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.gridx = 0;
-        gbc.gridy = 0;
-        gbc.anchor = GridBagConstraints.WEST;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
-
-        // Display name — determine what to show based on privacy settings
-        String displayName = AccountCardHelper.resolveDisplayName(profile, config);
-        String loggedIn = plugin.getLoggedInDisplayName();
-        // Prefer the learned in-game character name; the display name (alias or
-        // login email) only matches by coincidence when the alias equals the
-        // character name.
-        String matchName = profile.getCharacterName() != null
-            ? profile.getCharacterName()
-            : profile.getDisplayName();
-        boolean isOnline = loggedIn != null && loggedIn.equalsIgnoreCase(matchName);
-
-        // Always render in a row so we can fit the type badge alongside the name.
-        JPanel nameRow = new JPanel(new FlowLayout(FlowLayout.LEFT, Theme.SPACING_SM, 0));
-        nameRow.setOpaque(false);
-        if (isOnline)
-        {
-            nameRow.add(AccountCardHelper.createOnlineDot());
-        }
-        // Truncate slightly shorter to leave room for the badge — keeps the
-        // common case (online + Main placeholder) from clipping.
-        int nameMax = isOnline ? 13 : 15;
-        nameRow.add(AccountCardHelper.createTruncatingLabel(displayName, Theme.TEXT_PRIMARY,
-            Theme.fontBold(getFont(), Theme.FONT_SIZE_HEADING), nameMax));
-        nameRow.add(createTypeBadge());
-        infoPanel.add(nameRow, gbc);
-        gbc.gridy++;
-
-        // Username (shown if not hidden and different from display name)
-        if (!config.hideLogin())
-        {
-            String username = profile.getUsername();
-            if (username != null && !username.equals(displayName))
-            {
-                infoPanel.add(AccountCardHelper.createTruncatingLabel(username, Theme.TEXT_SECONDARY,
-                    Theme.fontRegular(getFont(), Theme.FONT_SIZE_HEADING), 25), gbc);
-                gbc.gridy++;
-            }
-        }
-
-        // Notes preview
-        if (!config.hideNotes())
-        {
-            AccountMetadata meta = profile.getMetadata();
-            if (meta != null && meta.getNotes() != null && !meta.getNotes().isEmpty())
-            {
-                String notes = meta.getNotes();
-                JLabel notesLabel = AccountCardHelper.createTruncatingLabel(notes, Theme.TEXT_SECONDARY,
-                    Theme.fontRegular(getFont(), Theme.FONT_SIZE_BODY), 22);
-                notesLabel.setToolTipText("<html><body style='width: 200px'>" + AccountCardHelper.escapeHtml(notes) + "</body></html>");
-                infoPanel.add(notesLabel, gbc);
-                gbc.gridy++;
-            }
-        }
-
-        // Last-online stamp (suppressed while the account is currently logged in —
-        // the green online dot already conveys that, and "just now" would be misleading
-        // once they've been online for hours).
-        if (!isOnline && !config.hideLastOnline())
-        {
-            AccountMetadata meta = profile.getMetadata();
-            if (meta != null && meta.getLastOnlineAt() != null)
-            {
-                String relative = AccountCardHelper.formatTimeAgo(meta.getLastOnlineAt());
-                if (relative != null)
-                {
-                    JLabel lastOnlineLabel = new JLabel(relative);
-                    lastOnlineLabel.setForeground(Theme.TEXT_MUTED);
-                    lastOnlineLabel.setFont(Theme.fontRegular(getFont(), Theme.FONT_SIZE_TINY));
-                    lastOnlineLabel.setToolTipText("Last seen logged in on this client");
-                    infoPanel.add(lastOnlineLabel, gbc);
-                }
-            }
-        }
-
-        return infoPanel;
-    }
-
-    /**
-     * Creates the clickable type badge that appears beside the account name.
-     * Clicking it opens a popup that lets the user change the account's type
-     * without opening the full edit form.
-     */
-    private AccountTypeBadge createTypeBadge()
-    {
-        AccountType current = (profile.getMetadata() != null
-            && profile.getMetadata().getAccountType() != null)
-            ? profile.getMetadata().getAccountType()
-            : AccountType.MAIN;
-
-        return new AccountTypeBadge(current, newType ->
-        {
-            AccountMetadata meta = profile.getMetadata();
-            if (meta == null)
-            {
-                meta = AccountMetadata.createDefault();
-                profile.setMetadata(meta);
-            }
-            meta.setAccountType(newType);
-            plugin.getAccountStorage().saveAccount(profile);
-            // Only this card's badge changed — refresh it in place instead of
-            // tearing down the whole panel. (Grid view falls back to a full
-            // rebuild inside refreshDynamicState.)
-            if (parentPanel != null)
-            {
-                parentPanel.refreshAccount(profile.getId());
-            }
-            else
-            {
-                plugin.getPanel().rebuild();
-            }
-        });
+        expansion = new CardExpansionHandler(plugin, panel, this, header);
+        add(expansion.getFormPanel(), BorderLayout.CENTER);
     }
 
     private JPanel createActionButtons()
     {
-        JPanel rightPanel = new JPanel();
-        rightPanel.setLayout(new BoxLayout(rightPanel, BoxLayout.Y_AXIS));
-        rightPanel.setOpaque(false);
-        rightPanel.add(createEditButton());
-        rightPanel.add(createMenuButton());
-        return rightPanel;
+        JButton edit = cardButton("\u270E", 14f, "Edit account");
+        edit.addActionListener(e -> expansion.toggleExpanded());
+
+        JButton menu = cardButton("\u22EE", 16f, "More options");
+        Controls.attachLazyMenu(menu, () -> new AccountCardActions(plugin, panel, account, this::expand).createContextMenu());
+
+        JPanel buttons = new JPanel();
+        buttons.setLayout(new BoxLayout(buttons, BoxLayout.Y_AXIS));
+        buttons.setOpaque(false);
+        buttons.add(edit);
+        buttons.add(menu);
+        return buttons;
     }
 
-    private JButton createEditButton()
+    private static JButton cardButton(String glyph, float fontSize, String tooltip)
     {
-        JButton button = new JButton("\u270E");
-        button.setBackground(Theme.CARD_BACKGROUND);
-        button.setForeground(Theme.TEXT_PRIMARY);
-        button.setFocusPainted(false);
-        button.setBorderPainted(false);
+        JButton button = Controls.ghostButton(glyph, Theme.TEXT_PRIMARY, Theme.CARD_HOVER, Theme.TEXT_PRIMARY);
         button.setPreferredSize(new Dimension(Theme.MENU_BUTTON_SIZE, Theme.MENU_BUTTON_SIZE));
-        button.setFont(button.getFont().deriveFont(14f));
-        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        button.setToolTipText("Edit account");
-        button.addActionListener(e -> { if (expansionHandler != null) expansionHandler.toggleExpanded(); });
-        button.addMouseListener(new MouseAdapter()
-        {
-            @Override
-            public void mouseEntered(MouseEvent e) { button.setBackground(Theme.CARD_HOVER); }
-
-            @Override
-            public void mouseExited(MouseEvent e) { button.setBackground(hovered ? Theme.CARD_HOVER : getBaseBackground()); }
-        });
+        button.setFont(button.getFont().deriveFont(fontSize));
+        button.setToolTipText(tooltip);
         return button;
     }
 
-    private JButton createMenuButton()
+    private void showGridContent()
     {
-        JButton button = new JButton("\u22EE");
-        button.setBackground(Theme.CARD_BACKGROUND);
-        button.setForeground(Theme.TEXT_PRIMARY);
-        button.setFocusPainted(false);
-        button.setBorderPainted(false);
-        button.setPreferredSize(new Dimension(Theme.MENU_BUTTON_SIZE, Theme.MENU_BUTTON_SIZE));
-        button.setFont(button.getFont().deriveFont(16f));
-        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        button.setToolTipText("More options");
+        removeAll();
+        setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        setPreferredSize(new Dimension(0, GridAccountBuilder.GRID_CARD_HEIGHT));
+        setMaximumSize(new Dimension(Integer.MAX_VALUE, GridAccountBuilder.GRID_CARD_HEIGHT));
+        GridAccountBuilder.build(this, plugin, panel, account, this::expand);
+        reattachTreeListeners();
+    }
 
-        Runnable onExpand = () -> { if (expansionHandler != null) expansionHandler.expand(); };
-        AccountCardActions actions = new AccountCardActions(plugin, profile, onExpand);
-        // Build the menu on first click — constructing it eagerly added six
-        // menu items + listeners per card per rebuild, for menus rarely opened.
-        JPopupMenu[] menuRef = new JPopupMenu[1];
-        button.addActionListener(e -> {
-            if (menuRef[0] == null)
-            {
-                menuRef[0] = actions.createContextMenu();
-            }
-            menuRef[0].show(button, 0, button.getHeight());
-        });
-
-        button.addMouseListener(new MouseAdapter()
+    /**
+     * Re-renders the parts of the card that depend on transient state
+     * (selection, online dot, last-online label, badge). No-op for content
+     * while the card is being edited.
+     */
+    void refreshDynamicState()
+    {
+        updateBackground();
+        if (isExpanded())
         {
-            @Override
-            public void mouseEntered(MouseEvent e) { button.setBackground(Theme.CARD_HOVER); }
+            return;
+        }
+        if (gridMode)
+        {
+            showGridContent();
+        }
+        else
+        {
+            infoHolder.removeAll();
+            infoHolder.add(ListCardBuilder.buildInfo(plugin, panel, account, getFont()), BorderLayout.CENTER);
+            reattachTreeListeners();
+        }
+        revalidate();
+        repaint();
+    }
 
-            @Override
-            public void mouseExited(MouseEvent e) { button.setBackground(hovered ? Theme.CARD_HOVER : getBaseBackground()); }
-        });
-        return button;
+    /**
+     * Spreads {@code listener} over the card and its non-interactive children
+     * (so hover and drag work anywhere on it), now and after every content rebuild.
+     */
+    void attachTreeListener(MouseAdapter listener)
+    {
+        treeListeners.add(listener);
+        AccountCardHelper.attachToTree(this, listener, true);
+    }
+
+    private void reattachTreeListeners()
+    {
+        AccountCardHelper.attachToTree(this, hoverTracker, false);
+        for (MouseAdapter listener : treeListeners)
+        {
+            AccountCardHelper.attachToTree(this, listener, true);
+        }
+    }
+
+    /** Fills the login screen with this account (the card's click action). */
+    public void select()
+    {
+        if (!isExpanded())
+        {
+            plugin.selectAccount(account);
+        }
     }
 
     public boolean isExpanded()
     {
-        if (gridEditMode) return true;
-        return expansionHandler != null && expansionHandler.isExpanded();
+        return gridEditing || (expansion != null && expansion.isExpanded());
     }
 
     public void expand()
     {
-        if (config.gridView()) expandGridEdit();
-        else if (expansionHandler != null) expansionHandler.expand();
+        if (gridMode) expandGridEdit();
+        else expansion.expand();
     }
 
-    public void collapse()
+    void collapse()
     {
-        if (gridEditMode) collapseGridEdit();
-        else if (expansionHandler != null) expansionHandler.collapse();
+        if (gridMode) collapseGridEdit();
+        else expansion.collapse();
     }
 
+    /** Grid tiles have no room for an inline form, so editing swaps the tile's content for it. */
     private void expandGridEdit()
     {
-        if (gridEditMode) return;
-        // Collapse any other expanded card first
-        if (parentPanel != null)
-        {
-            parentPanel.collapseExpandedCard();
-            parentPanel.setExpandedCard(this);
-        }
-        gridEditMode = true;
+        if (gridEditing) return;
+        panel.collapseExpandedCard();
+        panel.setExpandedCard(this);
+        gridEditing = true;
 
-        // Replace grid content with inline edit form
         removeAll();
-        setLayout(new BorderLayout(0, 0));
-        setBackground(Theme.FORM_BACKGROUND);
         setCursor(Cursor.getDefaultCursor());
-
-        InlineAccountForm editForm = new InlineAccountForm(plugin, profile, true, null);
-        editForm.setOnSave(savedAccount -> {
-            plugin.getAccountStorage().saveAccount(savedAccount);
-            collapseGridEdit();
-            plugin.getPanel().rebuild();
+        InlineAccountForm editForm = new InlineAccountForm(plugin.getAccountStorage(), account, true, null);
+        editForm.setOnSave(saved -> {
+            plugin.getAccountStorage().saveAccount(saved);
+            gridEditing = false;
+            panel.setExpandedCard(null);
+            panel.rebuild();
         });
         editForm.setOnCancel(this::collapseGridEdit);
         add(editForm, BorderLayout.CENTER);
 
-        // Remove fixed height so the form can size naturally
+        // Let the form size naturally.
         setPreferredSize(null);
         setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
-
+        updateBackground();
         editForm.focusUsernameField();
-        AccountCardHelper.revalidateToWindow(this);
+        AccountCardHelper.revalidateScrollPane(this);
     }
 
     private void collapseGridEdit()
     {
-        if (!gridEditMode) return;
-        gridEditMode = false;
-        if (parentPanel != null) parentPanel.setExpandedCard(null);
-        // Just rebuild the whole panel — simpler than trying to restore grid card state
-        plugin.getPanel().rebuild();
+        if (!gridEditing) return;
+        gridEditing = false;
+        panel.setExpandedCard(null);
+        showGridContent();
+        updateBackground();
+        AccountCardHelper.revalidateScrollPane(this);
     }
 
-    private void setupMouseListeners()
+    private void updateBackground()
     {
-        if (headerPanel != null)
+        Color background;
+        if (gridEditing)
         {
-            headerPanel.addMouseListener(new MouseAdapter()
+            background = Theme.FORM_BACKGROUND;
+        }
+        else if (hovered)
+        {
+            background = Theme.CARD_HOVER;
+        }
+        else
+        {
+            background = account.getId().equals(plugin.getSelectedAccountId()) ? Theme.CARD_SELECTED : Theme.CARD_BACKGROUND;
+        }
+        setBackground(background);
+        repaint();
+    }
+
+    /**
+     * Tracks hover across the whole card. Moving onto a child fires an exit
+     * on the parent, so an exit only counts once the pointer has left the
+     * card's bounds.
+     */
+    private final class HoverTracker extends MouseAdapter
+    {
+        @Override
+        public void mouseEntered(MouseEvent e)
+        {
+            if (!hovered)
             {
-                @Override
-                public void mouseEntered(MouseEvent e) { hovered = true; animateBackground(Theme.CARD_HOVER); }
-
-                @Override
-                public void mouseExited(MouseEvent e) { hovered = false; animateBackground(getBaseBackground()); }
-
-                @Override
-                public void mouseClicked(MouseEvent e)
-                {
-                    if (e.getButton() == MouseEvent.BUTTON1 && e.getClickCount() == 1
-                        && (expansionHandler == null || !expansionHandler.isExpanded()))
-                    {
-                        plugin.selectAccount(profile);
-                    }
-                }
-            });
+                hovered = true;
+                updateBackground();
+            }
         }
 
-        addMouseListener(new MouseAdapter()
+        @Override
+        public void mouseExited(MouseEvent e)
         {
-            @Override
-            public void mouseEntered(MouseEvent e) { hovered = true; animateBackground(Theme.CARD_HOVER); }
-
-            @Override
-            public void mouseExited(MouseEvent e) { hovered = false; animateBackground(getBaseBackground()); }
-
-            @Override
-            public void mouseClicked(MouseEvent e)
+            Point p = SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), AccountCardPanel.this);
+            if (hovered && !contains(p))
             {
-                if (headerPanel == null && e.getButton() == MouseEvent.BUTTON1)
-                {
-                    if (e.getClickCount() == 2 && !gridEditMode)
-                    {
-                        expandGridEdit();
-                    }
-                    else if (e.getClickCount() == 1 && !gridEditMode)
-                    {
-                        plugin.selectAccount(profile);
-                    }
-                }
+                hovered = false;
+                updateBackground();
             }
-        });
-    }
-
-    private Color getBaseBackground()
-    {
-        boolean isSelected = profile.getId().equals(plugin.getSelectedAccountId());
-        return isSelected ? Theme.CARD_SELECTED : Theme.CARD_BACKGROUND;
-    }
-
-    private void animateBackground(Color target)
-    {
-        currentBackground = target;
-        setBackground(target);
-        repaint();
+        }
     }
 }
