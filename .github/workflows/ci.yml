@@ -1,0 +1,48 @@
+name: Java checks
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '11'
+      - name: Compile and test without launching RuneLite
+        run: ./gradlew.bat build --no-daemon --console=plain
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install verified Gitleaks 8.30.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl --fail --location --retry 3 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz --output "$archive"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $archive" | sha256sum --check
+          tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" gitleaks
+      - name: Scan reachable history with reviewed exact fingerprints
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/gitleaks" git . --log-opts="--all --full-history" --redact=100 --no-banner --no-color --ignore-gitleaks-allow 2>&1 | tee "$RUNNER_TEMP/gitleaks.log"
+          if grep -Eq '(^|[[:space:]])ERR([[:space:]]|$)' "$RUNNER_TEMP/gitleaks.log"; then
+            echo "Scanner/Git error; refusing a false green."
+            exit 1
+          fi
+          grep -Eq '[1-9][0-9]* commits? scanned' "$RUNNER_TEMP/gitleaks.log"
